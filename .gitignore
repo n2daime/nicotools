@@ -1,0 +1,9 @@
+# 認証情報（user_session を含むためコミット禁止）
+/cookie.txt
+
+# Python
+__pycache__/
+*.py[cod]
+
+# 一時ファイル
+_dump_*.txt
