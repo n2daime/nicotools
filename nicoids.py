@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
-"""ニコニコ動画のシリーズ / マイリストから動画情報を書き出す GUI ツール。
+"""ニコニコ動画のシリーズ / マイリスト / 検索結果から動画情報を書き出す GUI ツール。
 
-- シリーズ: 認証不要（nvapi v2/series）
+- シリーズ  : 認証不要（nvapi v2/series）
 - マイリスト: 同フォルダの cookie.txt から user_session を読み取って使用（nvapi v2/mylists）
+- 検索結果  : /tag/… ・ /search/… のページに埋め込まれた JSON を利用（認証不要）
 
 出力モード:
 - TSV（詳細）: 動画ID / タイトル / 再生数 / コメント数 / 再生時間(mm:ss)
@@ -11,12 +12,14 @@
 標準ライブラリのみで動作します（tkinter / urllib）。
 """
 
+import html
 import json
 import os
 import re
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 import tkinter as tk
@@ -34,6 +37,14 @@ USER_AGENT = (
 TYPE_AUTO = "自動判定"
 TYPE_SERIES = "シリーズ"
 TYPE_MYLIST = "マイリスト"
+
+KIND_SERIES = "series"
+KIND_MYLIST = "mylist"
+KIND_SEARCH = "search"
+
+# 検索結果の1ページあたり件数（ニコニコ側で固定）と、取得可能なページ上限
+SEARCH_PAGE_SIZE = 32
+SEARCH_MAX_PAGE = 157
 
 MODE_TSV = "TSV（詳細）"
 MODE_ID = "IDのみ"
@@ -165,6 +176,75 @@ def http_get_json(url, cookie=None):
     raise last_error
 
 
+def http_get_text(url, cookie=None):
+    headers = {
+        "User-Agent": USER_AGENT,
+        "Accept": "text/html,application/xhtml+xml",
+        "Accept-Language": "ja,en-US;q=0.8",
+    }
+    if cookie:
+        headers["Cookie"] = cookie
+
+    last_error = None
+    for attempt in range(3):
+        try:
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+                return resp.read().decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as e:
+            last_error = e
+            if e.code in (429, 500, 502, 503, 504) and attempt < 2:
+                time.sleep(1.5 * (attempt + 1))
+                continue
+            raise
+        except urllib.error.URLError as e:
+            last_error = e
+            if attempt < 2:
+                time.sleep(1.0 * (attempt + 1))
+                continue
+            raise
+    raise last_error
+
+
+_SERVER_RESPONSE_RE = re.compile(
+    r'<meta\s+name="server-response"\s+content="([\s\S]*?)"\s*/?>'
+)
+
+
+def extract_embedded_json(page_html):
+    """検索ページに埋め込まれた server-response の JSON を取り出す。"""
+    m = _SERVER_RESPONSE_RE.search(page_html)
+    if not m:
+        return None
+    try:
+        return json.loads(html.unescape(m.group(1)))
+    except ValueError:
+        return None
+
+
+def normalize_search_url(url):
+    """非ASCIIや半角スペースをエンコードする（既存の %xx / + / - は保持）。"""
+    out = []
+    for ch in (url or "").strip():
+        code = ord(ch)
+        if code > 127:
+            out.append(urllib.parse.quote(ch))
+        elif ch == " ":
+            out.append("+")
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+def set_query_param(url, key, value):
+    """URL にクエリパラメータを付与（既に存在すれば置換）。"""
+    pattern = re.compile(r"([?&]" + re.escape(key) + r")=[^&]*")
+    if pattern.search(url):
+        return pattern.sub(lambda m: f"{m.group(1)}={value}", url)
+    sep = "&" if ("?" in url) else "?"
+    return f"{url}{sep}{key}={value}"
+
+
 def _video_info_from_item(item):
     """シリーズ/マイリストの1件から動画情報を取り出す（無ければ None）。"""
     if not isinstance(item, dict):
@@ -196,10 +276,25 @@ def _video_info_from_item(item):
     }
 
 
-def fetch_series(series_id, progress=None):
+def _stop_requested(should_stop):
+    return bool(should_stop and should_stop())
+
+
+def _limit_reached(videos, max_items):
+    return max_items is not None and len(videos) >= max_items
+
+
+def _trim(videos, max_items):
+    if max_items is not None and len(videos) > max_items:
+        return videos[:max_items]
+    return videos
+
+
+def fetch_series(series_id, progress=None, should_stop=None, max_items=None):
     videos = []
     page = 1
     total = None
+    reason = None
     while True:
         url = (
             f"{API_BASE}/v2/series/{series_id}"
@@ -215,20 +310,27 @@ def fetch_series(series_id, progress=None):
             info = _video_info_from_item(item)
             if info:
                 videos.append(info)
+        if _limit_reached(videos, max_items):
+            reason = "max_items"
+            break
+        if _stop_requested(should_stop):
+            reason = "cancelled"
+            break
         if not items or len(items) < PAGE_SIZE:
             break
         if total is not None and len(videos) >= total:
             break
         page += 1
         time.sleep(0.2)
-    return videos, total
+    return _trim(videos, max_items), total, reason
 
 
-def fetch_mylist(mylist_id, session, progress=None):
+def fetch_mylist(mylist_id, session, progress=None, should_stop=None, max_items=None):
     cookie = "user_session=" + session
     videos = []
     page = 1
     total = None
+    reason = None
     while True:
         url = f"{API_BASE}/v2/mylists/{mylist_id}?pageSize={PAGE_SIZE}&page={page}"
         data = http_get_json(url, cookie=cookie).get("data") or {}
@@ -243,6 +345,12 @@ def fetch_mylist(mylist_id, session, progress=None):
             info = _video_info_from_item(item)
             if info:
                 videos.append(info)
+        if _limit_reached(videos, max_items):
+            reason = "max_items"
+            break
+        if _stop_requested(should_stop):
+            reason = "cancelled"
+            break
         if not items:
             break
         if has_next is False:
@@ -253,7 +361,70 @@ def fetch_mylist(mylist_id, session, progress=None):
             break
         page += 1
         time.sleep(0.2)
-    return videos, total
+    return _trim(videos, max_items), total, reason
+
+
+# ---------------------------------------------------------------------------
+# 検索結果（/tag/… ・ /search/…）
+# ---------------------------------------------------------------------------
+def fetch_search(page_url, progress=None, should_stop=None, max_items=None):
+    """タグ検索 / キーワード検索の結果を取得する。
+
+    戻り値: (videos, total, reason)
+      reason: None(全部取得) / "page_limit" / "max_items" / "cancelled"
+    """
+    base = normalize_search_url(page_url)
+    videos = []
+    page = 1
+    total = None
+    reason = None
+
+    while True:
+        url = set_query_param(base, "page", page)
+        payload = extract_embedded_json(http_get_text(url))
+        response = (payload or {}).get("data", {}).get("response", {})
+        node = response.get("$getSearchVideoV2") if isinstance(response, dict) else None
+        if not isinstance(node, dict):
+            raise RuntimeError(
+                "検索結果を読み取れませんでした（ページ構造が想定と異なります）。"
+            )
+
+        if "error" in node:
+            err = node.get("error") or {}
+            heading = err.get("heading") or ""
+            if "ページ" in heading:
+                reason = "page_limit"
+                break
+            raise RuntimeError(f"検索エラー: {heading or err.get('message') or err}")
+
+        data = node.get("data") or {}
+        if total is None:
+            total = data.get("totalCount")
+        items = data.get("items") or []
+        if progress:
+            progress(f"検索結果を取得中… page {page}（{len(videos)}件）")
+        for item in items:
+            info = _video_info_from_item(item)
+            if info:
+                videos.append(info)
+
+        if _limit_reached(videos, max_items):
+            reason = "max_items"
+            break
+        if _stop_requested(should_stop):
+            reason = "cancelled"
+            break
+        if not items or not data.get("hasNext"):
+            break
+        page += 1
+        if page > SEARCH_MAX_PAGE + 2:
+            reason = "page_limit"
+            break
+        time.sleep(0.3)
+
+    if reason is None and total is not None and len(videos) < total:
+        reason = "page_limit"
+    return _trim(videos, max_items), total, reason
 
 
 # ---------------------------------------------------------------------------
@@ -264,27 +435,34 @@ def parse_target(text, force_type=TYPE_AUTO):
     if not t:
         return None
 
+    # 検索結果URL（/tag/… ・ /search/…）はURL全体を使う
+    if force_type == TYPE_AUTO and re.search(r"/(?:tag|search)/", t):
+        url = t
+        if not re.match(r"^https?://", url):
+            url = "https://www.nicovideo.jp/" + url.lstrip("/")
+        return KIND_SEARCH, url
+
     kind = None
     ident = None
     m = re.search(r"/series/(\d+)", t)
     if m:
-        kind, ident = "series", m.group(1)
+        kind, ident = KIND_SERIES, m.group(1)
     else:
         m = re.search(r"/mylist/(?:#/)?(\d+)", t)
         if m:
-            kind, ident = "mylist", m.group(1)
+            kind, ident = KIND_MYLIST, m.group(1)
 
     if ident is None:
         m = re.search(r"(\d+)", t)
         if not m:
             return None
         ident = m.group(1)
-        kind = "series"  # 数字だけのときはシリーズ扱い
+        kind = KIND_SERIES  # 数字だけのときはシリーズ扱い
 
     if force_type == TYPE_SERIES:
-        kind = "series"
+        kind = KIND_SERIES
     elif force_type == TYPE_MYLIST:
-        kind = "mylist"
+        kind = KIND_MYLIST
 
     return kind, ident
 
@@ -336,6 +514,7 @@ class App(tk.Tk):
 
         self._busy = False
         self._videos = []
+        self._cancel = threading.Event()
 
         top = ttk.Frame(self, padding=(10, 10, 10, 0))
         top.pack(side="top", fill="x")
@@ -347,6 +526,8 @@ class App(tk.Tk):
         self.url_entry.bind("<Return>", lambda e: self.on_fetch())
         self.fetch_btn = ttk.Button(top, text="取得", command=self.on_fetch)
         self.fetch_btn.pack(side="left")
+        self.abort_btn = ttk.Button(top, text="中断", command=self.on_abort, state="disabled")
+        self.abort_btn.pack(side="left", padx=(6, 0))
 
         opts = ttk.Frame(self, padding=(10, 6, 10, 0))
         opts.pack(side="top", fill="x")
@@ -380,6 +561,17 @@ class App(tk.Tk):
             opts2, text="ヘッダ行を付ける", variable=self.header_var,
             command=self.render,
         ).pack(side="left")
+
+        opts3 = ttk.Frame(self, padding=(10, 4, 10, 0))
+        opts3.pack(side="top", fill="x")
+        ttk.Label(opts3, text="最大件数:").pack(side="left")
+        self.max_var = tk.StringVar(value="")
+        self.max_entry = ttk.Entry(opts3, textvariable=self.max_var, width=8)
+        self.max_entry.pack(side="left", padx=(6, 2))
+        ttk.Label(opts3, text="件").pack(side="left")
+        ttk.Label(
+            opts3, text="（空欄＝制限なし／検索は約5,000件が上限）",
+        ).pack(side="left", padx=(8, 0))
 
         mid = ttk.Frame(self, padding=(10, 8, 10, 0))
         self.text = tk.Text(mid, wrap="none", undo=False, height=12, font=pick_text_font(self, 10))
@@ -445,6 +637,18 @@ class App(tk.Tk):
         self.copy_btn.configure(state=state)
         self.save_btn.configure(state=state)
         self.url_entry.configure(state=state)
+        self.max_entry.configure(state=state)
+        self.abort_btn.configure(state=("normal" if busy else "disabled"))
+
+    def get_max_items(self):
+        raw = self.max_var.get().strip()
+        if not raw:
+            return None
+        try:
+            value = int(raw.replace(",", ""))
+        except ValueError:
+            return None
+        return value if value > 0 else None
 
     # -- actions ----------------------------------------------------------
     def on_fetch(self):
@@ -455,18 +659,33 @@ class App(tk.Tk):
             messagebox.showwarning("入力エラー", "URL または ID を入力してください。")
             return
         kind, ident = target
+        self._cancel.clear()
         self.set_busy(True)
         self.set_status("取得中…")
         self._videos = []
         self.render()
         threading.Thread(
-            target=self._worker, args=(kind, ident), daemon=True,
+            target=self._worker, args=(kind, ident, self.get_max_items()), daemon=True,
         ).start()
 
-    def _worker(self, kind, ident):
+    def on_abort(self):
+        if not self._busy:
+            return
+        self._cancel.set()
+        self.set_status("中断しています…（ここまでの結果を表示します）")
+
+    def _worker(self, kind, ident, max_items):
         try:
-            if kind == "series":
-                videos, total = fetch_series(ident, progress=self._progress)
+            if kind == KIND_SERIES:
+                videos, total, reason = fetch_series(
+                    ident, progress=self._progress,
+                    should_stop=self._cancel.is_set, max_items=max_items,
+                )
+            elif kind == KIND_SEARCH:
+                videos, total, reason = fetch_search(
+                    ident, progress=self._progress,
+                    should_stop=self._cancel.is_set, max_items=max_items,
+                )
             else:
                 session, path = load_user_session()
                 if not session:
@@ -478,13 +697,17 @@ class App(tk.Tk):
                         "マイリストの取得には cookie.txt が必要です。\n"
                         f"{os.path.join(script_dir(), 'cookie.txt')} に user_session の値を保存してください。"
                     )
-                videos, total = fetch_mylist(ident, session, progress=self._progress)
+                videos, total, reason = fetch_mylist(
+                    ident, session, progress=self._progress,
+                    should_stop=self._cancel.is_set, max_items=max_items,
+                )
         except urllib.error.HTTPError as e:
-            if e.code == 403 and kind == "mylist":
+            if e.code == 403 and kind == KIND_MYLIST:
                 msg = ("cookie.txt の user_session が無効、または期限切れです（403）。\n"
                        "ブラウザでログインし直し、cookie.txt を更新してください。")
             elif e.code == 404:
-                msg = f"{'シリーズ' if kind == 'series' else 'マイリスト'}が見つかりません（404）。"
+                label = "シリーズ" if kind == KIND_SERIES else "マイリスト"
+                msg = f"{label}が見つかりません（404）。"
             else:
                 msg = f"HTTP エラー {e.code}: {e.reason}"
             self._fail(msg)
@@ -492,16 +715,32 @@ class App(tk.Tk):
         except Exception as e:  # noqa: BLE001
             self._fail(f"エラー: {e}")
             return
-        self.after(0, self._success, videos)
+        self.after(0, self._success, videos, total, reason)
 
     def _progress(self, msg):
         self.after(0, self.set_status, msg)
 
-    def _success(self, videos):
+    def _success(self, videos, total=None, reason=None):
         self._videos = videos
         self.render()
         self.set_busy(False)
-        self.set_status(f"{len(videos)}件取得しました。")
+        count = len(videos)
+        if reason == "cancelled":
+            self.set_status(f"中断しました（{count}件）。")
+        elif reason == "max_items":
+            self.set_status(f"{count}件取得しました（指定した最大件数に達したため終了）。")
+        elif reason == "page_limit" and total is not None:
+            self.set_status(
+                f"{count}件取得しました（全{total}件。検索の上限等のため途中で打ち切り）。"
+            )
+            messagebox.showwarning(
+                "一部のみ取得",
+                f"全{total}件のうち {count}件のみ取得しました。\n"
+                "ニコニコの検索結果は約5,000件が上限のため、それ以降は取得できません。\n"
+                "「最大件数」を指定すると、より早く切り上げられます。",
+            )
+        else:
+            self.set_status(f"{count}件取得しました。")
 
     def _fail(self, msg):
         self.after(0, self.set_busy, False)
