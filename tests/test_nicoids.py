@@ -369,6 +369,14 @@ class GuiSmokeTest(unittest.TestCase):
         self.assertEqual(dlg.entry.cget("show"), "")
         dlg.destroy()
 
+    def test_dialog_entry_is_wide_enough(self):
+        # user_session は 80 文字以上になるため、入力欄がある程度広いこと
+        dlg = n.LoginDialog(self.app, current=None)
+        self.app.update_idletasks()
+        self.assertGreaterEqual(int(dlg.entry.cget("width")), 90)
+        self.assertTrue(dlg.resizable())   # 長い値のとき広げられる
+        dlg.destroy()
+
     # -- open_login_dialog の状態遷移 -------------------------------------
     def test_open_dialog_ok_sets_session(self):
         with mock.patch.object(n, "LoginDialog", return_value=_FakeDialog("ok", "user_session_1_ab")), \

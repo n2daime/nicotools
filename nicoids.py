@@ -568,7 +568,6 @@ class LoginDialog(tk.Toplevel):
     def __init__(self, master, current=None):
         super().__init__(master)
         self.title("ログイン設定")
-        self.resizable(False, False)
         self.action = None      # "ok" / "clear" / None（キャンセル）
         self.value = None       # action == "ok" のときの正規化済み user_session
 
@@ -586,7 +585,8 @@ class LoginDialog(tk.Toplevel):
         row = ttk.Frame(body, padding=(0, 8, 0, 0))
         row.pack(fill="x")
         self.value_var = tk.StringVar(value=current or "")
-        self.entry = ttk.Entry(row, textvariable=self.value_var, width=52, show="●")
+        # user_session は 80〜90 文字程度になるため、横幅に余裕を持たせる
+        self.entry = ttk.Entry(row, textvariable=self.value_var, width=96, show="●")
         self.entry.pack(side="left", fill="x", expand=True)
 
         self.show_var = tk.BooleanVar(value=False)
@@ -610,6 +610,11 @@ class LoginDialog(tk.Toplevel):
         self.bind("<Return>", lambda e: self._on_ok())
         self.bind("<Escape>", lambda e: self._on_cancel())
         self.protocol("WM_DELETE_WINDOW", self._on_cancel)
+
+        # 内容が収まるサイズを最小値にして、長い値のときは広げられるようにする
+        self.update_idletasks()
+        self.minsize(self.winfo_reqwidth(), self.winfo_reqheight())
+        self.resizable(True, True)
 
         self.transient(master)
         self.grab_set()
