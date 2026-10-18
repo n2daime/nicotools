@@ -36,10 +36,11 @@ from tkinter import filedialog, messagebox, ttk
 API_BASE = "https://nvapi.nicovideo.jp"
 PAGE_SIZE = 100
 TIMEOUT = 20
-USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
-)
+
+# ニコニコ動画の担当者から「User-Agent は識別できるツール名にしてほしい
+# （日本語文字は入れない）」と依頼されている。既存の集計ツール（nicorank2019）と
+# 同じ名前に揃えている。変えるときは docs/nicovideo-api.md の「User-Agent」も更新する。
+USER_AGENT = "WeeklyNicoranProgram"
 
 TYPE_AUTO = "自動判定"
 TYPE_SERIES = "シリーズ"

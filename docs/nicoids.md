@@ -137,6 +137,7 @@ on_fetch()
 | 名前 | 値 | 意味 |
 |---|---|---|
 | `__version__` | `"1.0.0"` | ツールの版。タイトルバーに表示。**リリース時にタグ（`v1.0.0`）と一致させる** |
+| `USER_AGENT` | `"WeeklyNicoranProgram"` | ニコ動へのリクエストに付ける UA。**変えない**（[`docs/nicovideo-api.md`](nicovideo-api.md) の「User-Agent」参照） |
 | `PAGE_SIZE` | 100 | シリーズ/マイリストのページ取得件数 |
 | `SEARCH_PAGE_SIZE` | 32 | 検索の1ページ件数（ニコ動側固定・参考値） |
 | `SEARCH_MAX_PAGE` | 157 | 検索のページ上限（≒5,024件） |

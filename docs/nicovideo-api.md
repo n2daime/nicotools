@@ -7,17 +7,23 @@
 
 ## 1. 共通事項
 
-### 1.1 nvapi のリクエストヘッダ
+### 1.1 リクエストヘッダ（User-Agent）
 
-`https://nvapi.nicovideo.jp/...` を叩くときの基本ヘッダ:
+**ニコ動の担当者から「`User-Agent` は識別できるツール名にしてほしい（日本語文字は入れない）」と
+依頼されている。** 大量アクセスがあったときに、こちらへ連絡できる手掛かりにするため。
 
 ```http
-User-Agent: Mozilla/5.0 ...
+User-Agent: WeeklyNicoranProgram
 Accept: application/json
 X-Frontend-ID: 6
 X-Frontend-Version: 0
 ```
 
+- 値は `nicoids.py` の `USER_AGENT` 定数。**勝手に変えない**（ブラウザ偽装もしない）。
+- 既存の集計ツール（`nicorank2019` / `InternetUtil.cs`）と同じ名前に揃えている。
+- 日本語などの非 ASCII 文字を入れない（`USER_AGENT.isascii()` をテストで担保）。
+- 担当者の案では `Hogehoge/1.0` のような **`名前/バージョン` 形式でも可**。
+  今は既存ツールと揃えるためバージョンを付けていない。
 - `X-Frontend-Id`（小文字 d）でも通る（HTTP ヘッダは大文字小文字を区別しない）。
 - 認証が要る API は上に加えて `Cookie: user_session=<値>` を付ける。
 

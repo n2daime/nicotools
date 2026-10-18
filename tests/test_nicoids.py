@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """nicoids.py の単体テスト。
 
-- ネットワークは一切叩かない（HTTP はモック不要な純粋関数のみを対象にする）。
+- ネットワークは一切叩かない（HTTP は `urlopen` をモックして確認し、実通信はしない）。
 - 実トークンは使わない。すべてダミー値。
 - 確認コマンドやログに実セッション値を出さないこと（AGENTS.md 参照）。
 
@@ -285,6 +285,35 @@ class FormatTest(unittest.TestCase):
         self.assertEqual(n.strip_prefix("so33963154"), "33963154")
         self.assertEqual(n.strip_prefix("sm9"), "9")
         self.assertEqual(n.strip_prefix("123"), "123")
+
+
+# ---------------------------------------------------------------------------
+# HTTP ヘッダ（ニコ動の担当者からの依頼を守る）
+# ---------------------------------------------------------------------------
+class UserAgentTest(unittest.TestCase):
+    def test_user_agent_is_identifiable_tool_name(self):
+        # ニコ動の担当者から「識別できるツール名にしてほしい」と依頼されている
+        self.assertEqual(n.USER_AGENT, "WeeklyNicoranProgram")
+
+    def test_user_agent_has_no_japanese(self):
+        # 「日本語文字は入れない」という条件を守る
+        self.assertTrue(n.USER_AGENT.isascii(), n.USER_AGENT)
+
+    def test_requests_use_the_user_agent(self):
+        # 2つの取得経路（nvapi / HTML）の両方に乗っていること
+        captured = []
+
+        def fake_urlopen(req, timeout=None):
+            captured.append(req.get_header("User-agent"))
+            raise urllib.error.URLError("stop")   # 実通信はしない
+
+        with mock.patch.object(n.urllib.request, "urlopen", side_effect=fake_urlopen), \
+                mock.patch.object(n.time, "sleep"):   # リトライ待ちを飛ばす
+            for getter in (n.http_get_json, n.http_get_text):
+                with self.assertRaises(urllib.error.URLError):
+                    getter("https://example.invalid/")
+        self.assertTrue(captured)
+        self.assertEqual(set(captured), {n.USER_AGENT})
 
 
 # ---------------------------------------------------------------------------

@@ -63,6 +63,9 @@ nicotools/
    （詳細は「動作確認の基本」）。
 6. エラーは握りつぶさず、日本語で状態表示／ダイアログに出す。
 7. コミット前に `__pycache__` や一時ファイルを消す。`cookie.txt` が追跡されていないことを `git status` で確認する。
+8. HTTP の `User-Agent` は `USER_AGENT` 定数（`WeeklyNicoranProgram`）を使う。
+   ニコ動の担当者から「識別できるツール名にしてほしい（日本語文字は入れない）」と依頼されているため、
+   **ブラウザ偽装に戻したり勝手に変えたりしない**（詳細は [`docs/nicovideo-api.md`](docs/nicovideo-api.md) の「User-Agent」）。
 
 ## 実行方法
 
