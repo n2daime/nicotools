@@ -18,8 +18,11 @@ API や認証の前提は [`nicovideo-api.md`](nicovideo-api.md) を参照。
 - 種類は「自動判定」のままで URL から判別する（数字のみはシリーズ扱い）。
 - 取得 → 結果を一覧表示 → **コピー** / **ファイルに保存**。
 - **最大件数**の指定、および取得中の **中断**（ここまでの結果を表示）。
-- マイリストの認証は **GUI の「ログイン設定…」で `user_session` を入力**する方式（メモリ上のみ・ファイルに保存しない）。
+- マイリストの認証は **GUI の「ログイン設定…」で `user_session` を入力**する方式（既定はメモリ上のみ）。
   未入力なら同フォルダの `cookie.txt` をフォールバックとして読む（`resolve_session`：GUI 入力 > cookie.txt）。
+- ログイン設定で **「次回も使う（cookie.txt に保存する）」をチェックしたときだけ**、
+  `nicoids.py` と同じフォルダの `cookie.txt` に平文で保存する（既定 OFF）。
+  保存済みは「保存済みを削除」で消せる。
 
 ## 2. 画面と操作
 
@@ -37,6 +40,24 @@ URL: [.............................................] [取得] [中断]
 
 「ログイン設定…」は `LoginDialog`（モーダル）を開く。状態ラベルは `未設定` / `設定済み（入力）` /
 `設定済み（cookie.txt）` / `cookie.txt を読み取れません` / `要再ログイン` を表示する。
+
+ダイアログの構成:
+
+```
+┌ ログイン設定 ─────────────────────────────────────────┐
+│ マイリストの取得に使う user_session を入力します。      │
+│ [入力欄（●でマスク。80〜90文字が入る幅）           ]   │
+│ □ 値を表示する                                        │
+│ □ 次回も使う（cookie.txt に保存する）                 │
+│ 保存すると nicoids.py と同じフォルダの cookie.txt に    │
+│ 平文で書き込まれます（既定では保存しません）。          │
+│ [クリア] [保存済みを削除]        [キャンセル] [OK]      │
+└───────────────────────────────────────────────────────┘
+```
+
+- `action`: `"ok"` / `"clear"` / `"delete_saved"` / `None`（キャンセル）。
+- 「保存済みを削除」ボタンは `cookie.txt` があるときだけ出す。
+- 「次回も使う」は **既定 OFF**。チェック時のみ `save_user_session` で保存する。
 
 ### 出力形式
 
@@ -104,8 +125,10 @@ on_fetch()
 | `extract_user_session` / `load_user_session` | `cookie.txt` から `user_session` を取り出す（`load_user_session(paths=)` でテスト用に検索先を差し替え可。値が無いファイルは飛ばして次の候補を試す） |
 | `is_user_session_value(value)` | `user_session_<数字>_<トークン>` 形式かの検証（ダイアログの入力チェック用） |
 | `resolve_session(gui_value)` | 使う `user_session` を決める。`(value, source)` を返す（`"gui"` / `"cookie"` / `"invalid_cookie"` / `None`）。**純粋関数的でテストしやすい** |
-| `LoginDialog` | ログイン設定のモーダル。入力は `extract_user_session` で正規化し、`is_user_session_value` で形式検証（不一致は警告して閉じない）。`action`（`"ok"`/`"clear"`/`None`）と `value` で結果を返す |
-| `App._ensure_session` / `update_login_indicator` / `open_login_dialog` | mylist 実行前の解決・状態ラベル更新・ダイアログの多重生成防止つき表示 |
+| `cookie_file_path` / `has_saved_session` | 保存先（`script_dir()/cookie.txt`）と、保存済みの有無 |
+| `save_user_session` / `delete_saved_session` | `cookie.txt` への保存（平文・値のみ1行）と削除。保存先は固定で任意パスは受け付けない |
+| `LoginDialog` | ログイン設定のモーダル。入力は `extract_user_session` で正規化し、`is_user_session_value` で形式検証（不一致は警告して閉じない）。`action`（`"ok"`/`"clear"`/`"delete_saved"`/`None`）・`value`・`save_requested` で結果を返す |
+| `App._ensure_session` / `update_login_indicator` / `open_login_dialog` / `_save_session` / `_delete_saved_session` | mylist 実行前の解決・状態ラベル更新・ダイアログの多重生成防止つき表示・保存/削除の実行 |
 | `format_duration` / `format_count` / `sanitize_cell` / `strip_prefix` | 表示用の整形 |
 | `pick_text_font` | 結果欄のフォント自動選択 |
 
@@ -155,7 +178,8 @@ on_fetch()
   （403 を検知して再入力を促す方針）。
 - 検索ページの HTML 構造（`<meta name="server-response">`）に依存。仕様変更時は
   `extract_embedded_json` と `fetch_search` のパスを要修正。
-- 認証情報は**メモリ上のみ**で扱う。保存機能は意図的に用意していない。
+- 認証情報は既定では**メモリ上のみ**。「次回も使う」をチェックしたときだけ
+  `script_dir()/cookie.txt` に**平文**で保存する（保存先は固定。暗号化はしない）。
 
 ## 6. テスト手順
 
@@ -181,6 +205,11 @@ n.format_duration(3661)      # "1:01:01"
 n.extract_user_session("user_session=user_session_1234_xxx")  # "user_session_1234_xxx"
 n.resolve_session(None)[1]   # "cookie" / "invalid_cookie" / None（source だけ見る）
 
+# 保存・削除（保存先は script_dir()/cookie.txt に固定）
+n.has_saved_session()        # True / False
+n.save_user_session("user_session_1234_xxx")   # 平文・値のみ1行で保存
+n.delete_saved_session()     # 削除（無ければ False）
+
 # GUI スモークテスト
 app = n.App(); app.update_idletasks(); app.destroy()
 ```
@@ -199,3 +228,6 @@ app = n.App(); app.update_idletasks(); app.destroy()
 - 最大件数の指定と中断機能を追加。
 - マイリストの認証を **GUI の「ログイン設定…」ダイアログ**方式に変更（`cookie.txt` は任意のフォールバック）。
   認証解決を `resolve_session` に分離し、`tests/` を新設。公開向けに README / LICENSE を追加。
+- ログイン設定に **「次回も使う（cookie.txt に保存する）」**（既定 OFF）と
+  **「保存済みを削除」**を追加（`save_user_session` / `delete_saved_session`）。
+  入力欄を 96 文字幅に拡大し、ダイアログをリサイズ可能にした。

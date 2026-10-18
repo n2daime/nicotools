@@ -25,11 +25,12 @@ X-Frontend-Version: 0
 
 - ログインセッションの Cookie は **名前 `user_session`**、**値は `user_session_<数字>_<トークン>`** という形式。
   - 例: `Cookie: user_session=user_session_12345678_xxxxxxxx...`
-- `nicoids.py` では **GUI の「ログイン設定…」で入力した値を優先**して使う（メモリ上のみ・ファイルに保存しない）。
+- `nicoids.py` では **GUI の「ログイン設定…」で入力した値を優先**して使う（既定はメモリ上のみ）。
   - 貼り付けは「値のみ」「`user_session=...`」「Cookieヘッダ全体」のどれでもよい（`extract_user_session`）。
   - ダイアログ経路では `is_user_session_value` で `user_session_<数字>_<トークン>` 形式を検証する。
-- **`cookie.txt` は任意のフォールバック**（GUI 入力が空のときだけ読む。`resolve_session`）。
-  - 置く場合は **値のみを1行**で保存する運用。中身例: `user_session_12345678_xxxxxxxx...`
+  - 「次回も使う」をチェックしたときだけ `script_dir()/cookie.txt` に**平文**で保存する（`save_user_session`）。
+- **`cookie.txt` はフォールバック**（GUI 入力が空のときだけ読む。`resolve_session`）。
+  - 保存・手置きのどちらでも **値のみを1行**。中身例: `user_session_12345678_xxxxxxxx...`
   - `user_session=...` / Netscape形式 / Cookieヘッダ文字列も解釈できる。
 - **`cookie.txt` は絶対にコミットしない**（`.gitignore` 済み）。値は有効なログイン資格情報そのもの。
 - **セッション値をログ・ステータス・例外メッセージ・確認コマンドの出力に出さない**（AGENTS.md 参照）。

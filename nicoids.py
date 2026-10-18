@@ -4,6 +4,7 @@
 - シリーズ  : 認証不要（nvapi v2/series）
 - マイリスト: 「ログイン設定」で入力した user_session を使用（nvapi v2/mylists）。
               未入力なら同フォルダの cookie.txt をフォールバックとして読む。
+              入力時「次回も使う」を選ぶと cookie.txt に保存できる（既定は保存しない）。
 - 検索結果  : /tag/… ・ /search/… のページに埋め込まれた JSON を利用（認証不要）
 
 出力モード:
@@ -169,6 +170,37 @@ def load_user_session(paths=None):
         if value:
             return value, path
     return None, first_found
+
+
+def cookie_file_path():
+    """保存先（`nicoids.py` と同じフォルダの `cookie.txt`）。"""
+    return os.path.join(script_dir(), "cookie.txt")
+
+
+def has_saved_session(path=None):
+    """保存済みの cookie.txt があるか。"""
+    return os.path.isfile(path or cookie_file_path())
+
+
+def save_user_session(value, path=None):
+    """`user_session` を cookie.txt に保存する（平文・値のみ1行）。
+
+    保存先は `nicoids.py` と同じフォルダに固定（任意パスは受け付けない）。
+    """
+    path = path or cookie_file_path()
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        f.write(value + "\n")
+    return path
+
+
+def delete_saved_session(path=None):
+    """保存済みの cookie.txt を削除する。戻り値: 削除したら True。"""
+    path = path or cookie_file_path()
+    try:
+        os.remove(path)
+    except FileNotFoundError:
+        return False
+    return True
 
 
 def resolve_session(gui_value):
@@ -561,15 +593,18 @@ class LoginDialog(tk.Toplevel):
     - 貼り付けた文字列は extract_user_session() で正規化し、
       is_user_session_value() で user_session_<数字>_<トークン> 形式かを検証する
       （値のみ / user_session=… / Cookie ヘッダ全体、いずれでも可。形式違いは警告して閉じない）。
-    - 値はメモリ上でのみ扱い、ファイルには保存しない。
-    - 確定後に self.action（"ok" / "clear" / None）と self.value を見る。
+    - 値は既定ではメモリ上のみ。「次回も使う」をチェックしたときだけ
+      nicoids.py と同じフォルダの cookie.txt に保存する（平文・値のみ1行）。
+    - 確定後に self.action（"ok" / "clear" / "delete_saved" / None）と
+      self.value / self.save_requested を見る。
     """
 
-    def __init__(self, master, current=None):
+    def __init__(self, master, current=None, saved_path=None, saved_exists=False):
         super().__init__(master)
         self.title("ログイン設定")
-        self.action = None      # "ok" / "clear" / None（キャンセル）
-        self.value = None       # action == "ok" のときの正規化済み user_session
+        self.action = None            # "ok" / "clear" / "delete_saved" / None（キャンセル）
+        self.value = None             # action == "ok" のときの正規化済み user_session
+        self.save_requested = False   # 「次回も使う」がチェックされたか
 
         body = ttk.Frame(self, padding=(12, 12, 12, 0))
         body.pack(fill="both", expand=True)
@@ -594,16 +629,27 @@ class LoginDialog(tk.Toplevel):
             body, text="値を表示する", variable=self.show_var, command=self._toggle_show,
         ).pack(anchor="w", pady=(4, 0))
 
+        self.save_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            body, text="次回も使う（cookie.txt に保存する）", variable=self.save_var,
+        ).pack(anchor="w", pady=(4, 0))
+
+        saved_note = ("保存すると、nicoids.py と同じフォルダの cookie.txt に\n"
+                      "平文で書き込まれます（チェックしなければファイルは作られません）。")
+        if saved_exists:
+            saved_note += ("\n保存済みの cookie.txt があります"
+                           "（消すときは「保存済みを削除」）。")
         ttk.Label(
-            body, justify="left", foreground="#666666",
-            text=("「クリア」すると、ログイン設定は未設定に戻ります\n"
-                  "（同じフォルダに cookie.txt があれば、それを使います）。\n"
-                  "この値はファイルに保存されません（ツールを閉じると消えます）。"),
-        ).pack(anchor="w", pady=(8, 0))
+            body, justify="left", foreground="#666666", text=saved_note,
+        ).pack(anchor="w", pady=(6, 0))
 
         btns = ttk.Frame(self, padding=(12, 10, 12, 12))
         btns.pack(fill="x")
         ttk.Button(btns, text="クリア", command=self._on_clear).pack(side="left")
+        if saved_exists:
+            ttk.Button(
+                btns, text="保存済みを削除", command=self._on_delete_saved,
+            ).pack(side="left", padx=(6, 0))
         ttk.Button(btns, text="キャンセル", command=self._on_cancel).pack(side="right")
         ttk.Button(btns, text="OK", command=self._on_ok).pack(side="right", padx=(0, 6))
 
@@ -629,7 +675,7 @@ class LoginDialog(tk.Toplevel):
             messagebox.showwarning(
                 "入力エラー",
                 "user_session を入力してください。\n"
-                "cookie.txt を使う場合は「クリア」を押してください。",
+                "（保存済みの cookie.txt を使う場合は「キャンセル」を押してください。）",
                 parent=self,
             )
             return
@@ -644,10 +690,16 @@ class LoginDialog(tk.Toplevel):
             return
         self.action = "ok"
         self.value = value
+        self.save_requested = self.save_var.get()
         self.destroy()
 
     def _on_clear(self):
         self.action = "clear"
+        self.value = None
+        self.destroy()
+
+    def _on_delete_saved(self):
+        self.action = "delete_saved"
         self.value = None
         self.destroy()
 
@@ -816,20 +868,54 @@ class App(tk.Tk):
             self._login_dlg.lift()
             self._login_dlg.focus_set()
             return
-        dlg = LoginDialog(self, current=self._session)
+        saved_path = cookie_file_path()
+        dlg = LoginDialog(
+            self, current=self._session,
+            saved_path=saved_path, saved_exists=has_saved_session(saved_path),
+        )
         self._login_dlg = dlg
         self.wait_window(dlg)
         self._login_dlg = None
+
         if dlg.action == "ok":
             self._session = dlg.value
             self._relogin_needed = False
+            if dlg.save_requested:
+                self._save_session(dlg.value)
+            else:
+                self.set_status("ログイン設定を更新しました。")
             self.update_login_indicator()
-            self.set_status("ログイン設定を更新しました。")
         elif dlg.action == "clear":
             self._session = None
             self._relogin_needed = False
             self.update_login_indicator()
             self.set_status("ログイン設定をクリアしました。")
+        elif dlg.action == "delete_saved":
+            self._delete_saved_session()
+
+    def _save_session(self, value):
+        try:
+            path = save_user_session(value)
+        except OSError as e:
+            messagebox.showerror(
+                "保存できません", f"cookie.txt に保存できませんでした:\n{e}",
+            )
+            return
+        self.set_status(f"ログイン設定を保存しました（{os.path.basename(path)}）。")
+
+    def _delete_saved_session(self):
+        try:
+            removed = delete_saved_session()
+        except OSError as e:
+            messagebox.showerror(
+                "削除できません", f"cookie.txt を削除できませんでした:\n{e}",
+            )
+            return
+        self.update_login_indicator()
+        self.set_status(
+            "保存済みの cookie.txt を削除しました。" if removed
+            else "保存済みの cookie.txt はありません。"
+        )
 
     def set_busy(self, busy):
         self._busy = busy

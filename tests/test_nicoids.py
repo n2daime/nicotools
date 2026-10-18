@@ -132,6 +132,36 @@ class LoadUserSessionTest(unittest.TestCase):
                 self.assertEqual(n.load_user_session(paths=[path]), (None, path))
 
 
+class SavedSessionTest(unittest.TestCase):
+    def test_save_then_load_roundtrip(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "cookie.txt")
+            n.save_user_session("user_session_1_abc", path=path)
+            self.assertTrue(n.has_saved_session(path))
+            self.assertEqual(n.load_user_session(paths=[path]), ("user_session_1_abc", path))
+
+    def test_saved_file_is_value_only_single_line(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "cookie.txt")
+            n.save_user_session("user_session_1_abc", path=path)
+            with open(path, encoding="utf-8") as f:
+                self.assertEqual(f.read(), "user_session_1_abc\n")
+
+    def test_delete_saved(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "cookie.txt")
+            n.save_user_session("user_session_1_abc", path=path)
+            self.assertTrue(n.delete_saved_session(path))
+            self.assertFalse(n.has_saved_session(path))
+
+    def test_delete_missing_returns_false(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertFalse(n.delete_saved_session(path=os.path.join(d, "nope.txt")))
+
+    def test_cookie_file_path_is_next_to_script(self):
+        self.assertEqual(n.cookie_file_path(), os.path.join(n.script_dir(), "cookie.txt"))
+
+
 class ResolveSessionTest(unittest.TestCase):
     def test_gui_wins_over_cookie(self):
         with mock.patch.object(n, "load_user_session", return_value=("cookie_val", "/p")) as load:
@@ -268,10 +298,11 @@ def _tk_available():
 class _FakeDialog:
     """open_login_dialog のテスト用ダミー（wait_window を挟まずに検証する）。"""
 
-    def __init__(self, action=None, value=None, exists=True):
+    def __init__(self, action=None, value=None, exists=True, save_requested=False):
         self.action = action
         self.value = value
         self._exists = exists
+        self.save_requested = save_requested
         self.lifted = False
 
     def winfo_exists(self):
@@ -282,6 +313,18 @@ class _FakeDialog:
 
     def focus_set(self):
         pass
+
+
+def _widget_texts(widget):
+    """ウィジェット木の text を集める（ボタンの有無の確認用）。"""
+    texts = []
+    for w in widget.winfo_children():
+        try:
+            texts.append(w.cget("text"))
+        except Exception:
+            pass
+        texts += _widget_texts(w)
+    return texts
 
 
 class GuiSmokeTest(unittest.TestCase):
@@ -341,6 +384,36 @@ class GuiSmokeTest(unittest.TestCase):
         self.assertEqual(dlg.action, "clear")
         self.assertIsNone(dlg.value)
 
+    def test_dialog_save_defaults_to_off(self):
+        dlg = n.LoginDialog(self.app, current=None)
+        self.app.update_idletasks()
+        self.assertFalse(dlg.save_var.get())
+        dlg.value_var.set("user_session_1_ab")
+        with mock.patch.object(n.messagebox, "showwarning"):
+            dlg._on_ok()
+        self.assertFalse(dlg.save_requested)   # 既定では保存しない
+
+    def test_dialog_save_requested_when_checked(self):
+        dlg = n.LoginDialog(self.app, current=None)
+        self.app.update_idletasks()
+        dlg.value_var.set("user_session_1_ab")
+        dlg.save_var.set(True)
+        with mock.patch.object(n.messagebox, "showwarning"):
+            dlg._on_ok()
+        self.assertTrue(dlg.save_requested)
+
+    def test_dialog_delete_button_only_when_saved(self):
+        dlg = n.LoginDialog(self.app, current=None, saved_exists=False)
+        self.app.update_idletasks()
+        self.assertNotIn("保存済みを削除", _widget_texts(dlg))
+        dlg.destroy()
+
+        dlg2 = n.LoginDialog(self.app, current=None, saved_exists=True)
+        self.app.update_idletasks()
+        self.assertIn("保存済みを削除", _widget_texts(dlg2))
+        dlg2._on_delete_saved()
+        self.assertEqual(dlg2.action, "delete_saved")
+
     def test_dialog_cancel(self):
         dlg = n.LoginDialog(self.app, current=None)
         self.app.update_idletasks()
@@ -397,6 +470,39 @@ class GuiSmokeTest(unittest.TestCase):
                 mock.patch.object(self.app, "wait_window"):
             self.app.open_login_dialog()
         self.assertEqual(self.app._session, "user_session_old")
+
+    def test_open_dialog_ok_without_save_does_not_write(self):
+        with mock.patch.object(n, "LoginDialog",
+                               return_value=_FakeDialog("ok", "user_session_1_ab")), \
+                mock.patch.object(self.app, "wait_window"), \
+                mock.patch.object(n, "save_user_session") as save:
+            self.app.open_login_dialog()
+        self.assertFalse(save.called)
+
+    def test_open_dialog_ok_with_save_writes(self):
+        fake = _FakeDialog("ok", "user_session_1_ab", save_requested=True)
+        with mock.patch.object(n, "LoginDialog", return_value=fake), \
+                mock.patch.object(self.app, "wait_window"), \
+                mock.patch.object(n, "save_user_session",
+                                  return_value=n.cookie_file_path()) as save:
+            self.app.open_login_dialog()
+        save.assert_called_once_with("user_session_1_ab")
+
+    def test_open_dialog_delete_saved(self):
+        with mock.patch.object(n, "LoginDialog", return_value=_FakeDialog("delete_saved")), \
+                mock.patch.object(self.app, "wait_window"), \
+                mock.patch.object(n, "delete_saved_session", return_value=True) as delete:
+            self.app.open_login_dialog()
+        self.assertTrue(delete.called)
+        self.assertIn("削除しました", self.app.status_var.get())
+
+    def test_open_dialog_passes_saved_state(self):
+        with mock.patch.object(n, "LoginDialog") as ctor, \
+                mock.patch.object(self.app, "wait_window"), \
+                mock.patch.object(n, "has_saved_session", return_value=True):
+            ctor.return_value = _FakeDialog(None)
+            self.app.open_login_dialog()
+        self.assertTrue(ctor.call_args.kwargs["saved_exists"])
 
     def test_open_dialog_no_duplicate(self):
         existing = _FakeDialog()
