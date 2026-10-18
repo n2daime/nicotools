@@ -55,8 +55,8 @@ GET https://nvapi.nicovideo.jp/v2/series/{seriesId}?pageSize=100&page={n}&sensit
 ```jsonc
 {
   "data": {
-    "detail": { "id": 62864, "title": "...", "owner": { "id": "ch...", "name": "..." } },
-    "totalCount": 12,
+    "detail": { "id": 228685, "title": "...", "owner": { "id": "ch...", "name": "..." } },
+    "totalCount": 16,
     "items": [
       {
         "meta": { "id": "so33963154", "order": 1 },
@@ -78,7 +78,7 @@ GET https://nvapi.nicovideo.jp/v2/series/{seriesId}?pageSize=100&page={n}&sensit
 
 - ページング: `page` を 1,2,... と進める（`pageSize=100` が有効）。`totalCount` に達したら終了。
 - 並び順はシリーズの順（`meta.order`）。
-- 動作確認用の定番: `series/62864`（12件）。
+- 動作確認用の定番: `series/228685`（16件）。
 
 ---
 
@@ -96,10 +96,10 @@ GET https://nvapi.nicovideo.jp/v2/mylists/{mylistId}?pageSize=100&page={n}
 {
   "data": {
     "mylist": {
-      "id": 79588643,
+      "id": 1754716,
       "name": "...",
       "description": "...",
-      "totalItemCount": 38,   // ← シリーズの totalCount とは名前が違う
+      "totalItemCount": 131,   // ← シリーズの totalCount とは名前が違う
       "hasNext": false,
       "items": [
         {

@@ -39,9 +39,9 @@ python nicoids.py
 
 | 貼り付けるもの | 例 | ログイン設定 |
 |---|---|---|
-| シリーズのページ | `https://www.nicovideo.jp/series/62864` | 不要 |
-| マイリストのページ | `https://www.nicovideo.jp/mylist/79588643` | **必要** |
-| タグのページ | `https://www.nicovideo.jp/tag/けものフレンズ` | 不要 |
+| シリーズのページ | `https://www.nicovideo.jp/series/228685` | 不要 |
+| マイリストのページ | `https://www.nicovideo.jp/mylist/1754716` | **必要** |
+| タグのページ | `https://www.nicovideo.jp/tag/ニコニコランキング` | 不要 |
 | キーワード検索のページ | `https://www.nicovideo.jp/search/○○` | 不要 |
 
 ## マイリストを使うとき（ログイン設定）

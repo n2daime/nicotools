@@ -18,9 +18,9 @@
 
 | やりたいこと | 例 |
 |---|---|
-| シリーズの動画一覧を作る | `https://www.nicovideo.jp/series/62864` |
-| 自分のマイリストの一覧を作る | `https://www.nicovideo.jp/mylist/79588643` |
-| タグの検索結果を一覧にする | `https://www.nicovideo.jp/tag/けものフレンズ` |
+| シリーズの動画一覧を作る | `https://www.nicovideo.jp/series/228685` |
+| 自分のマイリストの一覧を作る | `https://www.nicovideo.jp/mylist/1754716` |
+| タグの検索結果を一覧にする | `https://www.nicovideo.jp/tag/ニコニコランキング` |
 | キーワード検索の結果を一覧にする | `https://www.nicovideo.jp/search/○○` |
 
 集めた結果は、次のどちらかで出力できます。
@@ -126,11 +126,11 @@ python nicoids.py
 
 | 貼り付けるもの | 例 | ログイン設定 |
 |---|---|---|
-| シリーズのページ | `https://www.nicovideo.jp/series/62864` | 不要 |
-| シリーズの番号だけ | `62864` | 不要 |
-| マイリストのページ | `https://www.nicovideo.jp/mylist/79588643` | **必要** |
-| ユーザーページ内のマイリスト | `https://www.nicovideo.jp/user/123/mylist/79588643` | **必要** |
-| タグのページ | `https://www.nicovideo.jp/tag/けものフレンズ` | 不要 |
+| シリーズのページ | `https://www.nicovideo.jp/series/228685` | 不要 |
+| シリーズの番号だけ | `228685` | 不要 |
+| マイリストのページ | `https://www.nicovideo.jp/mylist/1754716` | **必要** |
+| ユーザーページ内のマイリスト | `https://www.nicovideo.jp/user/123/mylist/1754716` | **必要** |
+| タグのページ | `https://www.nicovideo.jp/tag/ニコニコランキング` | 不要 |
 | キーワード検索のページ | `https://www.nicovideo.jp/search/○○` | 不要 |
 
 - アドレスバーから**そのまま**貼り付けるのがいちばん確実です。

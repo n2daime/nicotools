@@ -186,20 +186,27 @@ class ResolveSessionTest(unittest.TestCase):
 class ParseTargetTest(unittest.TestCase):
     def test_series_url(self):
         self.assertEqual(
-            n.parse_target("https://www.nicovideo.jp/series/62864"),
-            (n.KIND_SERIES, "62864"),
+            n.parse_target("https://www.nicovideo.jp/series/228685"),
+            (n.KIND_SERIES, "228685"),
         )
 
     def test_mylist_url(self):
         self.assertEqual(
-            n.parse_target("https://www.nicovideo.jp/mylist/79588643"),
-            (n.KIND_MYLIST, "79588643"),
+            n.parse_target("https://www.nicovideo.jp/mylist/1754716"),
+            (n.KIND_MYLIST, "1754716"),
+        )
+
+    def test_user_series_url(self):
+        # ユーザーページから開いたシリーズ（/user/{uid}/series/{id}）も受け付ける
+        self.assertEqual(
+            n.parse_target("https://www.nicovideo.jp/user/123/series/228685"),
+            (n.KIND_SERIES, "228685"),
         )
 
     def test_user_mylist_url(self):
         self.assertEqual(
-            n.parse_target("https://www.nicovideo.jp/user/123/mylist/79588643"),
-            (n.KIND_MYLIST, "79588643"),
+            n.parse_target("https://www.nicovideo.jp/user/123/mylist/1754716"),
+            (n.KIND_MYLIST, "1754716"),
         )
 
     def test_tag_url(self):
@@ -208,12 +215,12 @@ class ParseTargetTest(unittest.TestCase):
         self.assertTrue(url.startswith("https://www.nicovideo.jp/tag/"))
 
     def test_number_only_is_series(self):
-        self.assertEqual(n.parse_target("62864"), (n.KIND_SERIES, "62864"))
+        self.assertEqual(n.parse_target("228685"), (n.KIND_SERIES, "228685"))
 
     def test_force_mylist(self):
         self.assertEqual(
-            n.parse_target("62864", force_type=n.TYPE_MYLIST),
-            (n.KIND_MYLIST, "62864"),
+            n.parse_target("228685", force_type=n.TYPE_MYLIST),
+            (n.KIND_MYLIST, "228685"),
         )
 
     def test_empty(self):
@@ -601,7 +608,7 @@ class GuiSmokeTest(unittest.TestCase):
         # 認証不要の取得で「要再ログイン」が消えないこと
         self.app._mark_relogin()
         with mock.patch.object(n, "fetch_series", return_value=([], None, None)):
-            self.app._worker(n.KIND_SERIES, "62864", None, None)
+            self.app._worker(n.KIND_SERIES, "228685", None, None)
             self.app.update()
         self.assertTrue(self.app._relogin_needed)
         self.assertEqual(self.app.login_state_var.get(), "ログイン: 要再ログイン")

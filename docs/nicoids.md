@@ -195,8 +195,8 @@ python -m unittest discover -s tests
 import nicoids as n
 
 # 取得（認証不要のシリーズで疎通確認）
-v, t, r = n.fetch_series("62864")                 # 12件, r=None
-v, t, r = n.fetch_series("62864", max_items=5)    # 5件, r="max_items"
+v, t, r = n.fetch_series("228685")                 # 16件, r=None
+v, t, r = n.fetch_series("228685", max_items=5)    # 5件, r="max_items"
 v, t, r = n.fetch_search(url, should_stop=lambda: True)  # 1ページで r="cancelled"
 
 # 整形・認証解決
