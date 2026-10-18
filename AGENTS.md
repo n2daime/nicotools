@@ -20,7 +20,8 @@ nicotools/
 ├─ nicoids.py             ← ツール: シリーズ/マイリスト/検索結果の動画情報エクスポート
 └─ docs/
    ├─ nicovideo-api.md    ← ニコ動 API / スクレイピングの再利用ナレッジ
-   └─ nicoids.md          ← nicoids.py の仕様・設計メモ・テスト手順
+   ├─ nicoids.md          ← nicoids.py の仕様・設計メモ・テスト手順（開発者向け）
+   └─ nicoids-manual.md   ← nicoids.py の使い方ガイド（利用者向け）
 ```
 
 ## ナレッジへの導線
@@ -28,8 +29,13 @@ nicotools/
 | 知りたいこと | 参照先 |
 |---|---|
 | ニコ動の API エンドポイント・認証・ページング・上限 | [`docs/nicovideo-api.md`](docs/nicovideo-api.md) |
-| `nicoids.py` の仕様・設計・テスト・既知の制限 | [`docs/nicoids.md`](docs/nicoids.md) |
+| `nicoids.py` の仕様・設計・テスト・既知の制限（開発者向け） | [`docs/nicoids.md`](docs/nicoids.md) |
+| `nicoids.py` の使い方・`cookie.txt` の作り方（利用者向け） | [`docs/nicoids-manual.md`](docs/nicoids-manual.md) |
 | 新ツールを作るときの共通ルール | このファイルの下記「開発ルール」 |
+
+**利用者向けの説明書を書くときは `docs/nicoids-manual.md` の構成・トーンに合わせる。**
+ツールの使い方や仕様が変わったら、`docs/nicoids.md`（開発者向け）と
+`docs/nicoids-manual.md`（利用者向け）の両方を更新する。
 
 **新しいツールを作る／直す前に、まず `docs/nicovideo-api.md` を読むこと。** 認証やページングの落とし穴がまとまっています。
 
