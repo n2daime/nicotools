@@ -163,22 +163,17 @@ class SavedSessionTest(unittest.TestCase):
 
 
 class ResolveSessionTest(unittest.TestCase):
-    def test_gui_wins_over_cookie(self):
-        with mock.patch.object(n, "load_user_session", return_value=("cookie_val", "/p")) as load:
-            self.assertEqual(n.resolve_session("gui_val"), ("gui_val", "gui"))
-            load.assert_not_called()   # GUI 値があれば cookie.txt は読まない
-
-    def test_cookie_fallback(self):
+    def test_cookie(self):
         with mock.patch.object(n, "load_user_session", return_value=("cookie_val", "/p")):
-            self.assertEqual(n.resolve_session(None), ("cookie_val", "cookie"))
+            self.assertEqual(n.resolve_session(), ("cookie_val", "cookie"))
 
     def test_invalid_cookie(self):
         with mock.patch.object(n, "load_user_session", return_value=(None, "/p")):
-            self.assertEqual(n.resolve_session(None), (None, "invalid_cookie"))
+            self.assertEqual(n.resolve_session(), (None, "invalid_cookie"))
 
     def test_nothing(self):
         with mock.patch.object(n, "load_user_session", return_value=(None, None)):
-            self.assertEqual(n.resolve_session(None), (None, None))
+            self.assertEqual(n.resolve_session(), (None, None))
 
 
 # ---------------------------------------------------------------------------
@@ -298,11 +293,10 @@ def _tk_available():
 class _FakeDialog:
     """open_login_dialog のテスト用ダミー（wait_window を挟まずに検証する）。"""
 
-    def __init__(self, action=None, value=None, exists=True, save_requested=False):
+    def __init__(self, action=None, value=None, exists=True):
         self.action = action
         self.value = value
         self._exists = exists
-        self.save_requested = save_requested
         self.lifted = False
 
     def winfo_exists(self):
@@ -346,76 +340,66 @@ class GuiSmokeTest(unittest.TestCase):
         self.assertIn("ログイン:", self.app.login_state_var.get())
 
     # -- LoginDialog 単体 --------------------------------------------------
-    def test_dialog_ok_normalizes(self):
+    def test_dialog_save_normalizes(self):
         with mock.patch.object(n.messagebox, "showwarning"):
-            dlg = n.LoginDialog(self.app, current=None)
+            dlg = n.LoginDialog(self.app)
             self.app.update_idletasks()
             dlg.value_var.set("Cookie: user_session=user_session_9_zz; a=1")
-            dlg._on_ok()
-        self.assertEqual(dlg.action, "ok")
+            dlg._on_save()
+        self.assertEqual(dlg.action, "save")
         self.assertEqual(dlg.value, "user_session_9_zz")
 
     def test_dialog_rejects_non_session(self):
         with mock.patch.object(n.messagebox, "showwarning") as warn:
-            dlg = n.LoginDialog(self.app, current=None)
+            dlg = n.LoginDialog(self.app)
             self.app.update_idletasks()
             dlg.value_var.set("https://example.com/whatever")
-            dlg._on_ok()
+            dlg._on_save()
             self.assertTrue(warn.called)
         self.assertIsNone(dlg.action)
         self.assertTrue(dlg.winfo_exists())   # 閉じずに再入力を促す
         dlg.destroy()
 
-    def test_dialog_empty_ok_warns(self):
+    def test_dialog_empty_save_warns(self):
         with mock.patch.object(n.messagebox, "showwarning") as warn:
-            dlg = n.LoginDialog(self.app, current=None)
+            dlg = n.LoginDialog(self.app)
             self.app.update_idletasks()
             dlg.value_var.set("   ")
-            dlg._on_ok()
+            dlg._on_save()
             self.assertTrue(warn.called)
         self.assertIsNone(dlg.action)
         self.assertTrue(dlg.winfo_exists())
         dlg.destroy()
 
-    def test_dialog_clear(self):
-        dlg = n.LoginDialog(self.app, current="user_session_1_ab")
+    def test_dialog_clear_only_clears_entry(self):
+        # 「クリア」は入力欄を空にするだけで、閉じないしファイルにも触らない
+        dlg = n.LoginDialog(self.app)
         self.app.update_idletasks()
+        dlg.value_var.set("user_session_1_ab")
         dlg._on_clear()
-        self.assertEqual(dlg.action, "clear")
-        self.assertIsNone(dlg.value)
-
-    def test_dialog_save_defaults_to_off(self):
-        dlg = n.LoginDialog(self.app, current=None)
-        self.app.update_idletasks()
-        self.assertFalse(dlg.save_var.get())
-        dlg.value_var.set("user_session_1_ab")
-        with mock.patch.object(n.messagebox, "showwarning"):
-            dlg._on_ok()
-        self.assertFalse(dlg.save_requested)   # 既定では保存しない
-
-    def test_dialog_save_requested_when_checked(self):
-        dlg = n.LoginDialog(self.app, current=None)
-        self.app.update_idletasks()
-        dlg.value_var.set("user_session_1_ab")
-        dlg.save_var.set(True)
-        with mock.patch.object(n.messagebox, "showwarning"):
-            dlg._on_ok()
-        self.assertTrue(dlg.save_requested)
-
-    def test_dialog_delete_button_only_when_saved(self):
-        dlg = n.LoginDialog(self.app, current=None, saved_exists=False)
-        self.app.update_idletasks()
-        self.assertNotIn("保存済みを削除", _widget_texts(dlg))
+        self.assertEqual(dlg.value_var.get(), "")
+        self.assertIsNone(dlg.action)
+        self.assertTrue(dlg.winfo_exists())
         dlg.destroy()
 
-        dlg2 = n.LoginDialog(self.app, current=None, saved_exists=True)
+    def test_dialog_delete(self):
+        dlg = n.LoginDialog(self.app, saved_exists=True)
         self.app.update_idletasks()
-        self.assertIn("保存済みを削除", _widget_texts(dlg2))
-        dlg2._on_delete_saved()
-        self.assertEqual(dlg2.action, "delete_saved")
+        dlg._on_delete()
+        self.assertEqual(dlg.action, "delete")
+        self.assertIsNone(dlg.value)
+
+    def test_dialog_button_labels_are_explicit(self):
+        dlg = n.LoginDialog(self.app)
+        self.app.update_idletasks()
+        texts = _widget_texts(dlg)
+        for expected in ("保存する", "ログイン情報を削除する", "キャンセル", "クリア"):
+            self.assertIn(expected, texts)
+        self.assertNotIn("OK", texts)   # 紛らわしい「OK」は廃止
+        dlg.destroy()
 
     def test_dialog_cancel(self):
-        dlg = n.LoginDialog(self.app, current=None)
+        dlg = n.LoginDialog(self.app)
         self.app.update_idletasks()
         dlg._on_cancel()
         self.assertIsNone(dlg.action)
@@ -423,7 +407,7 @@ class GuiSmokeTest(unittest.TestCase):
 
     def test_dialog_escape_cancels(self):
         # 回帰テスト: Esc のバインドがハンドラを呼び忘れていないこと
-        dlg = n.LoginDialog(self.app, current=None)
+        dlg = n.LoginDialog(self.app)
         self.app.update()
         dlg.focus_force()
         self.app.update()
@@ -434,7 +418,7 @@ class GuiSmokeTest(unittest.TestCase):
         self.assertFalse(dlg.winfo_exists())
 
     def test_dialog_show_toggle(self):
-        dlg = n.LoginDialog(self.app, current=None)
+        dlg = n.LoginDialog(self.app)
         self.app.update_idletasks()
         self.assertEqual(dlg.entry.cget("show"), "●")
         dlg.show_var.set(True)
@@ -444,57 +428,39 @@ class GuiSmokeTest(unittest.TestCase):
 
     def test_dialog_entry_is_wide_enough(self):
         # user_session は 80 文字以上になるため、入力欄がある程度広いこと
-        dlg = n.LoginDialog(self.app, current=None)
+        dlg = n.LoginDialog(self.app)
         self.app.update_idletasks()
         self.assertGreaterEqual(int(dlg.entry.cget("width")), 90)
         self.assertTrue(dlg.resizable())   # 長い値のとき広げられる
         dlg.destroy()
 
     # -- open_login_dialog の状態遷移 -------------------------------------
-    def test_open_dialog_ok_sets_session(self):
-        with mock.patch.object(n, "LoginDialog", return_value=_FakeDialog("ok", "user_session_1_ab")), \
-                mock.patch.object(self.app, "wait_window"):
-            self.app.open_login_dialog()
-        self.assertEqual(self.app._session, "user_session_1_ab")
-
-    def test_open_dialog_clear_unsets_session(self):
-        self.app._session = "user_session_old"
-        with mock.patch.object(n, "LoginDialog", return_value=_FakeDialog("clear")), \
-                mock.patch.object(self.app, "wait_window"):
-            self.app.open_login_dialog()
-        self.assertIsNone(self.app._session)
-
-    def test_open_dialog_cancel_keeps_state(self):
-        self.app._session = "user_session_old"
-        with mock.patch.object(n, "LoginDialog", return_value=_FakeDialog(None)), \
-                mock.patch.object(self.app, "wait_window"):
-            self.app.open_login_dialog()
-        self.assertEqual(self.app._session, "user_session_old")
-
-    def test_open_dialog_ok_without_save_does_not_write(self):
+    def test_open_dialog_save_writes(self):
         with mock.patch.object(n, "LoginDialog",
-                               return_value=_FakeDialog("ok", "user_session_1_ab")), \
-                mock.patch.object(self.app, "wait_window"), \
-                mock.patch.object(n, "save_user_session") as save:
-            self.app.open_login_dialog()
-        self.assertFalse(save.called)
-
-    def test_open_dialog_ok_with_save_writes(self):
-        fake = _FakeDialog("ok", "user_session_1_ab", save_requested=True)
-        with mock.patch.object(n, "LoginDialog", return_value=fake), \
+                               return_value=_FakeDialog("save", "user_session_1_ab")), \
                 mock.patch.object(self.app, "wait_window"), \
                 mock.patch.object(n, "save_user_session",
                                   return_value=n.cookie_file_path()) as save:
             self.app.open_login_dialog()
         save.assert_called_once_with("user_session_1_ab")
+        self.assertIn("保存しました", self.app.status_var.get())
 
-    def test_open_dialog_delete_saved(self):
-        with mock.patch.object(n, "LoginDialog", return_value=_FakeDialog("delete_saved")), \
+    def test_open_dialog_delete(self):
+        with mock.patch.object(n, "LoginDialog", return_value=_FakeDialog("delete")), \
                 mock.patch.object(self.app, "wait_window"), \
                 mock.patch.object(n, "delete_saved_session", return_value=True) as delete:
             self.app.open_login_dialog()
         self.assertTrue(delete.called)
         self.assertIn("削除しました", self.app.status_var.get())
+
+    def test_open_dialog_cancel_does_nothing(self):
+        with mock.patch.object(n, "LoginDialog", return_value=_FakeDialog(None)), \
+                mock.patch.object(self.app, "wait_window"), \
+                mock.patch.object(n, "save_user_session") as save, \
+                mock.patch.object(n, "delete_saved_session") as delete:
+            self.app.open_login_dialog()
+        self.assertFalse(save.called)
+        self.assertFalse(delete.called)
 
     def test_open_dialog_passes_saved_state(self):
         with mock.patch.object(n, "LoginDialog") as ctor, \
@@ -515,7 +481,6 @@ class GuiSmokeTest(unittest.TestCase):
     # -- 状態ラベル --------------------------------------------------------
     def test_indicator_labels(self):
         cases = [
-            (("v", "gui"), "設定済み（入力）"),
             (("v", "cookie"), "設定済み（cookie.txt）"),
             ((None, "invalid_cookie"), "cookie.txt を読み取れません"),
             ((None, None), "未設定"),
@@ -528,7 +493,7 @@ class GuiSmokeTest(unittest.TestCase):
     def test_relogin_label_survives_recompute(self):
         self.app._mark_relogin()
         self.assertEqual(self.app.login_state_var.get(), "ログイン: 要再ログイン")
-        with mock.patch.object(n, "resolve_session", return_value=("v", "gui")):
+        with mock.patch.object(n, "resolve_session", return_value=("v", "cookie")):
             self.app.update_login_indicator()
         self.assertEqual(self.app.login_state_var.get(), "ログイン: 要再ログイン")
 
@@ -568,7 +533,7 @@ class GuiSmokeTest(unittest.TestCase):
 
     # -- _ensure_session ---------------------------------------------------
     def test_ensure_session_returns_existing(self):
-        with mock.patch.object(n, "resolve_session", return_value=("user_session_1_ab", "gui")):
+        with mock.patch.object(n, "resolve_session", return_value=("user_session_1_ab", "cookie")):
             self.assertEqual(self.app._ensure_session(), "user_session_1_ab")
 
     def test_ensure_session_declined(self):
@@ -577,17 +542,19 @@ class GuiSmokeTest(unittest.TestCase):
             self.assertIsNone(self.app._ensure_session())
 
     def test_ensure_session_via_dialog(self):
-        # 呼び出し回数ではなく「状態」で検証する（リファクタに強い）
-        def fake_resolve(gui_value):
-            return (gui_value, "gui") if gui_value else (None, None)
-
-        def fake_open():
-            self.app._session = "user_session_1_ab"
-
-        with mock.patch.object(n, "resolve_session", side_effect=fake_resolve), \
+        # ダイアログで保存された後、cookie.txt から解決できるようになる
+        with mock.patch.object(n, "resolve_session",
+                               side_effect=[(None, None), ("user_session_1_ab", "cookie")]), \
                 mock.patch.object(n.messagebox, "askyesno", return_value=True), \
-                mock.patch.object(self.app, "open_login_dialog", side_effect=fake_open):
+                mock.patch.object(self.app, "open_login_dialog") as open_dlg:
             self.assertEqual(self.app._ensure_session(), "user_session_1_ab")
+        self.assertTrue(open_dlg.called)
+
+    def test_ensure_session_still_missing_after_dialog(self):
+        with mock.patch.object(n, "resolve_session", return_value=(None, None)), \
+                mock.patch.object(n.messagebox, "askyesno", return_value=True), \
+                mock.patch.object(self.app, "open_login_dialog"):
+            self.assertIsNone(self.app._ensure_session())
 
 
 if __name__ == "__main__":

@@ -18,11 +18,10 @@ API や認証の前提は [`nicovideo-api.md`](nicovideo-api.md) を参照。
 - 種類は「自動判定」のままで URL から判別する（数字のみはシリーズ扱い）。
 - 取得 → 結果を一覧表示 → **コピー** / **ファイルに保存**。
 - **最大件数**の指定、および取得中の **中断**（ここまでの結果を表示）。
-- マイリストの認証は **GUI の「ログイン設定…」で `user_session` を入力**する方式（既定はメモリ上のみ）。
-  未入力なら同フォルダの `cookie.txt` をフォールバックとして読む（`resolve_session`：GUI 入力 > cookie.txt）。
-- ログイン設定で **「次回も使う（cookie.txt に保存する）」をチェックしたときだけ**、
-  `nicoids.py` と同じフォルダの `cookie.txt` に平文で保存する（既定 OFF）。
-  保存済みは「保存済みを削除」で消せる。
+- マイリストの認証は **GUI の「ログイン設定…」で `user_session` を保存**する方式。
+  保存先は同フォルダの `cookie.txt`（`resolve_session` が読む）。既定では保存されず、
+  ダイアログで「保存する」を押したときだけ書き込む（平文・値のみ1行）。
+  「ログイン情報を削除する」で保存済みを消せる。
 
 ## 2. 画面と操作
 
@@ -38,26 +37,26 @@ URL: [.............................................] [取得] [中断]
 状態: 12件取得しました。
 ```
 
-「ログイン設定…」は `LoginDialog`（モーダル）を開く。状態ラベルは `未設定` / `設定済み（入力）` /
+「ログイン設定…」は `LoginDialog`（モーダル）を開く。状態ラベルは `未設定` /
 `設定済み（cookie.txt）` / `cookie.txt を読み取れません` / `要再ログイン` を表示する。
 
-ダイアログの構成:
+ダイアログの構成（ボタンは「何が起きるか」が分かる文言にしている）:
 
 ```
 ┌ ログイン設定 ─────────────────────────────────────────┐
 │ マイリストの取得に使う user_session を入力します。      │
-│ [入力欄（●でマスク。80〜90文字が入る幅）           ]   │
+│ [入力欄（●でマスク。80〜90文字が入る幅）   ] [クリア]  │
 │ □ 値を表示する                                        │
-│ □ 次回も使う（cookie.txt に保存する）                 │
-│ 保存すると nicoids.py と同じフォルダの cookie.txt に    │
-│ 平文で書き込まれます（既定では保存しません）。          │
-│ [クリア] [保存済みを削除]        [キャンセル] [OK]      │
+│ 「保存する」と、nicoids.py と同じフォルダの cookie.txt  │
+│ に平文で書き込まれます。                               │
+│ [ログイン情報を削除する]      [保存する] [キャンセル]   │
 └───────────────────────────────────────────────────────┘
 ```
 
-- `action`: `"ok"` / `"clear"` / `"delete_saved"` / `None`（キャンセル）。
-- 「保存済みを削除」ボタンは `cookie.txt` があるときだけ出す。
-- 「次回も使う」は **既定 OFF**。チェック時のみ `save_user_session` で保存する。
+- `action`: `"save"` / `"delete"` / `None`（キャンセル）。
+- 「クリア」は**入力欄を空にするだけ**（ダイアログは閉じない。保存済みファイルにも触らない）。
+- 「ログイン情報を削除する」は常に表示（保存が無ければ「ありません」と状態表示するだけ）。
+- `Return` = 保存、`Esc` = キャンセル。
 
 ### 出力形式
 
@@ -94,7 +93,7 @@ on_fetch()
   _success() → render() → 状態表示
 ```
 
-- `_ensure_session()` は **メインスレッドで** `resolve_session(self._session)` を評価する。
+- `_ensure_session()` は **メインスレッドで** `resolve_session()` を評価する。
   未設定ならスレッドを起こす前に設定ダイアログへ誘導し、`None` を返して取得を中止する。
 - セッション解決だけは `_worker` から追い出してある（未設定時に無駄なスレッドを作らないため）。
 
@@ -124,10 +123,10 @@ on_fetch()
 | `normalize_search_url` / `set_query_param` | 検索URLのエンコードと `page` 付与 |
 | `extract_user_session` / `load_user_session` | `cookie.txt` から `user_session` を取り出す（`load_user_session(paths=)` でテスト用に検索先を差し替え可。値が無いファイルは飛ばして次の候補を試す） |
 | `is_user_session_value(value)` | `user_session_<数字>_<トークン>` 形式かの検証（ダイアログの入力チェック用） |
-| `resolve_session(gui_value)` | 使う `user_session` を決める。`(value, source)` を返す（`"gui"` / `"cookie"` / `"invalid_cookie"` / `None`）。**純粋関数的でテストしやすい** |
+| `resolve_session()` | cookie.txt から使う `user_session` を決める。`(value, source)` を返す（`"cookie"` / `"invalid_cookie"` / `None`） |
 | `cookie_file_path` / `has_saved_session` | 保存先（`script_dir()/cookie.txt`）と、保存済みの有無 |
 | `save_user_session` / `delete_saved_session` | `cookie.txt` への保存（平文・値のみ1行）と削除。保存先は固定で任意パスは受け付けない |
-| `LoginDialog` | ログイン設定のモーダル。入力は `extract_user_session` で正規化し、`is_user_session_value` で形式検証（不一致は警告して閉じない）。`action`（`"ok"`/`"clear"`/`"delete_saved"`/`None`）・`value`・`save_requested` で結果を返す |
+| `LoginDialog` | ログイン設定のモーダル。入力は `extract_user_session` で正規化し、`is_user_session_value` で形式検証（不一致は警告して閉じない）。`action`（`"save"`/`"delete"`/`None`）と `value` で結果を返す |
 | `App._ensure_session` / `update_login_indicator` / `open_login_dialog` / `_save_session` / `_delete_saved_session` | mylist 実行前の解決・状態ラベル更新・ダイアログの多重生成防止つき表示・保存/削除の実行 |
 | `format_duration` / `format_count` / `sanitize_cell` / `strip_prefix` | 表示用の整形 |
 | `pick_text_font` | 結果欄のフォント自動選択 |
@@ -172,14 +171,14 @@ on_fetch()
 
 - 検索結果は **157ページ（約5,024件）が上限**。それ以上はニコ動側がエラーを返す。
 - 検索は 32件/ページ固定なので、多件数は時間がかかる（上限指定・中断で短縮可能）。
-- マイリスト取得は認証が必須。GUI の「ログイン設定…」で `user_session` を入力するか、
-  `cookie.txt` を置く。403 のときはセッション切れを疑う（状態ラベルが `要再ログイン` になる）。
-- **複数アカウントは非対応**（`self._session` は単一）。セッションの事前有効性チェックも行わない
+- マイリスト取得は認証が必須。GUI の「ログイン設定…」で `user_session` を保存する。
+  403 のときはセッション切れを疑う（状態ラベルが `要再ログイン` になる）。
+- **複数アカウントは非対応**（`cookie.txt` は1つだけ）。セッションの事前有効性チェックも行わない
   （403 を検知して再入力を促す方針）。
 - 検索ページの HTML 構造（`<meta name="server-response">`）に依存。仕様変更時は
   `extract_embedded_json` と `fetch_search` のパスを要修正。
-- 認証情報は既定では**メモリ上のみ**。「次回も使う」をチェックしたときだけ
-  `script_dir()/cookie.txt` に**平文**で保存する（保存先は固定。暗号化はしない）。
+- 認証情報は「保存する」を押したときだけ `script_dir()/cookie.txt` に**平文**で保存する
+  （保存先は固定。暗号化はしない）。メモリ上だけで使う経路は用意していない。
 
 ## 6. テスト手順
 
@@ -203,7 +202,7 @@ v, t, r = n.fetch_search(url, should_stop=lambda: True)  # 1ページで r="canc
 n.format_duration(1420)      # "23:40"
 n.format_duration(3661)      # "1:01:01"
 n.extract_user_session("user_session=user_session_1234_xxx")  # "user_session_1234_xxx"
-n.resolve_session(None)[1]   # "cookie" / "invalid_cookie" / None（source だけ見る）
+n.resolve_session()[1]       # "cookie" / "invalid_cookie" / None（source だけ見る）
 
 # 保存・削除（保存先は script_dir()/cookie.txt に固定）
 n.has_saved_session()        # True / False
@@ -215,7 +214,7 @@ app = n.App(); app.update_idletasks(); app.destroy()
 ```
 
 - 取得関数は GUI を挟まず単体で呼べる。**実トークンをスクリプトに直書きしない**。
-- `resolve_session(None)` の**値**を print すると、実 `cookie.txt` がある環境では実トークンが
+- `resolve_session()` の**値**を print すると、実 `cookie.txt` がある環境では実トークンが
   出力に残る。確認は `[1]`（source）だけを見るなど、**値を出さない**こと。
 - 日本語の確認は Windows コンソールだと文字化けするので、**結果をファイルに書いて確認**する。
 
@@ -228,6 +227,7 @@ app = n.App(); app.update_idletasks(); app.destroy()
 - 最大件数の指定と中断機能を追加。
 - マイリストの認証を **GUI の「ログイン設定…」ダイアログ**方式に変更（`cookie.txt` は任意のフォールバック）。
   認証解決を `resolve_session` に分離し、`tests/` を新設。公開向けに README / LICENSE を追加。
-- ログイン設定に **「次回も使う（cookie.txt に保存する）」**（既定 OFF）と
-  **「保存済みを削除」**を追加（`save_user_session` / `delete_saved_session`）。
+- ログイン設定を **「保存する」／「ログイン情報を削除する」／「キャンセル」** の
+  3ボタンに整理（`OK`＋チェックボックスの二重表現をやめた。`クリア` は入力欄の右へ移動）。
+  メモリ上だけのセッションを廃止し、`cookie.txt` に一本化（`resolve_session` から `gui_value` を削除）。
   入力欄を 96 文字幅に拡大し、ダイアログをリサイズ可能にした。

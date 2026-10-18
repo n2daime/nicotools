@@ -2,9 +2,8 @@
 """ニコニコ動画のシリーズ / マイリスト / 検索結果から動画情報を書き出す GUI ツール。
 
 - シリーズ  : 認証不要（nvapi v2/series）
-- マイリスト: 「ログイン設定」で入力した user_session を使用（nvapi v2/mylists）。
-              未入力なら同フォルダの cookie.txt をフォールバックとして読む。
-              入力時「次回も使う」を選ぶと cookie.txt に保存できる（既定は保存しない）。
+- マイリスト: 「ログイン設定」で保存した user_session を使用（nvapi v2/mylists）。
+              保存先は同フォルダの cookie.txt（平文・値のみ1行）。
 - 検索結果  : /tag/… ・ /search/… のページに埋め込まれた JSON を利用（認証不要）
 
 出力モード:
@@ -203,19 +202,14 @@ def delete_saved_session(path=None):
     return True
 
 
-def resolve_session(gui_value):
-    """マイリスト取得に使う user_session を決める。
-
-    優先順: GUI 入力 > cookie.txt（任意のフォールバック）。
+def resolve_session():
+    """マイリスト取得に使う user_session を cookie.txt から決める。
 
     戻り値: (value, source)
-      source: "gui"            … GUI に入力された値を使う
-              "cookie"         … cookie.txt の値を使う
+      source: "cookie"         … cookie.txt の値を使う
               "invalid_cookie" … cookie.txt はあるが user_session を読み取れない
-              None             … どちらも無い
+              None             … cookie.txt が無い
     """
-    if gui_value:
-        return gui_value, "gui"
     value, path = load_user_session()
     if value:
         return value, "cookie"
@@ -588,23 +582,20 @@ def format_count(value):
 # GUI
 # ---------------------------------------------------------------------------
 class LoginDialog(tk.Toplevel):
-    """マイリスト取得に使う user_session を入力するモーダルダイアログ。
+    """マイリスト用の user_session を cookie.txt に保存／削除するモーダルダイアログ。
 
     - 貼り付けた文字列は extract_user_session() で正規化し、
       is_user_session_value() で user_session_<数字>_<トークン> 形式かを検証する
       （値のみ / user_session=… / Cookie ヘッダ全体、いずれでも可。形式違いは警告して閉じない）。
-    - 値は既定ではメモリ上のみ。「次回も使う」をチェックしたときだけ
-      nicoids.py と同じフォルダの cookie.txt に保存する（平文・値のみ1行）。
-    - 確定後に self.action（"ok" / "clear" / "delete_saved" / None）と
-      self.value / self.save_requested を見る。
+    - 「保存する」で nicoids.py と同じフォルダの cookie.txt に平文で保存する。
+    - 確定後に self.action（"save" / "delete" / None）と self.value を見る。
     """
 
-    def __init__(self, master, current=None, saved_path=None, saved_exists=False):
+    def __init__(self, master, saved_path=None, saved_exists=False):
         super().__init__(master)
         self.title("ログイン設定")
-        self.action = None            # "ok" / "clear" / "delete_saved" / None（キャンセル）
-        self.value = None             # action == "ok" のときの正規化済み user_session
-        self.save_requested = False   # 「次回も使う」がチェックされたか
+        self.action = None      # "save" / "delete" / None（キャンセル）
+        self.value = None       # action == "save" のときの正規化済み user_session
 
         body = ttk.Frame(self, padding=(12, 12, 12, 0))
         body.pack(fill="both", expand=True)
@@ -619,41 +610,38 @@ class LoginDialog(tk.Toplevel):
 
         row = ttk.Frame(body, padding=(0, 8, 0, 0))
         row.pack(fill="x")
-        self.value_var = tk.StringVar(value=current or "")
+        self.value_var = tk.StringVar(value="")
         # user_session は 80〜90 文字程度になるため、横幅に余裕を持たせる
         self.entry = ttk.Entry(row, textvariable=self.value_var, width=96, show="●")
         self.entry.pack(side="left", fill="x", expand=True)
+        # 「クリア」は入力欄の内容だけを消す（保存済みファイルには触らない）
+        ttk.Button(row, text="クリア", command=self._on_clear).pack(side="left", padx=(6, 0))
 
         self.show_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(
             body, text="値を表示する", variable=self.show_var, command=self._toggle_show,
         ).pack(anchor="w", pady=(4, 0))
 
-        self.save_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(
-            body, text="次回も使う（cookie.txt に保存する）", variable=self.save_var,
-        ).pack(anchor="w", pady=(4, 0))
-
-        saved_note = ("保存すると、nicoids.py と同じフォルダの cookie.txt に\n"
-                      "平文で書き込まれます（チェックしなければファイルは作られません）。")
+        note = ("「保存する」と、nicoids.py と同じフォルダの cookie.txt に\n"
+                "平文で書き込まれます。")
+        if saved_path:
+            note += f"\n保存先: {saved_path}"
         if saved_exists:
-            saved_note += ("\n保存済みの cookie.txt があります"
-                           "（消すときは「保存済みを削除」）。")
+            note += "\n保存済みの cookie.txt があります（消すときは「ログイン情報を削除する」）。"
         ttk.Label(
-            body, justify="left", foreground="#666666", text=saved_note,
+            body, justify="left", foreground="#666666", text=note,
         ).pack(anchor="w", pady=(6, 0))
 
         btns = ttk.Frame(self, padding=(12, 10, 12, 12))
         btns.pack(fill="x")
-        ttk.Button(btns, text="クリア", command=self._on_clear).pack(side="left")
-        if saved_exists:
-            ttk.Button(
-                btns, text="保存済みを削除", command=self._on_delete_saved,
-            ).pack(side="left", padx=(6, 0))
+        self.delete_btn = ttk.Button(
+            btns, text="ログイン情報を削除する", command=self._on_delete,
+        )
+        self.delete_btn.pack(side="left")
         ttk.Button(btns, text="キャンセル", command=self._on_cancel).pack(side="right")
-        ttk.Button(btns, text="OK", command=self._on_ok).pack(side="right", padx=(0, 6))
+        ttk.Button(btns, text="保存する", command=self._on_save).pack(side="right", padx=(0, 6))
 
-        self.bind("<Return>", lambda e: self._on_ok())
+        self.bind("<Return>", lambda e: self._on_save())
         self.bind("<Escape>", lambda e: self._on_cancel())
         self.protocol("WM_DELETE_WINDOW", self._on_cancel)
 
@@ -669,13 +657,12 @@ class LoginDialog(tk.Toplevel):
     def _toggle_show(self):
         self.entry.configure(show="" if self.show_var.get() else "●")
 
-    def _on_ok(self):
+    def _on_save(self):
         raw = self.value_var.get().strip()
         if not raw:
             messagebox.showwarning(
                 "入力エラー",
-                "user_session を入力してください。\n"
-                "（保存済みの cookie.txt を使う場合は「キャンセル」を押してください。）",
+                "user_session を入力してください。",
                 parent=self,
             )
             return
@@ -688,18 +675,16 @@ class LoginDialog(tk.Toplevel):
                 parent=self,
             )
             return
-        self.action = "ok"
+        self.action = "save"
         self.value = value
-        self.save_requested = self.save_var.get()
         self.destroy()
 
     def _on_clear(self):
-        self.action = "clear"
-        self.value = None
-        self.destroy()
+        # 入力欄を空にするだけ（保存済みファイルは消さない）
+        self.value_var.set("")
 
-    def _on_delete_saved(self):
-        self.action = "delete_saved"
+    def _on_delete(self):
+        self.action = "delete"
         self.value = None
         self.destroy()
 
@@ -719,8 +704,7 @@ class App(tk.Tk):
         self._busy = False
         self._videos = []
         self._cancel = threading.Event()
-        self._session = None       # GUI で入力された user_session（メモリ上のみ）
-        self._login_dlg = None     # ログイン設定ダイアログ（多重生成防止）
+        self._login_dlg = None        # ログイン設定ダイアログ（多重生成防止）
         self._relogin_needed = False  # 403 を受けて再ログイン待ちかどうか
 
         top = ttk.Frame(self, padding=(10, 10, 10, 0))
@@ -846,16 +830,16 @@ class App(tk.Tk):
         self.status_var.set(msg)
 
     def update_login_indicator(self, resolved=None):
-        """ログイン状態ラベルを、今どちらの user_session が使われるかに合わせる。
+        """ログイン状態ラベルを、cookie.txt の状態に合わせる。
 
         resolved に (value, source) を渡すと、その結果を使って再解決を省く。
         """
         if self._relogin_needed:
             self.login_state_var.set("ログイン: 要再ログイン")
             return
-        value, source = resolve_session(self._session) if resolved is None else resolved
+        value, source = resolve_session() if resolved is None else resolved
         if value:
-            label = "設定済み（入力）" if source == "gui" else "設定済み（cookie.txt）"
+            label = "設定済み（cookie.txt）"
         elif source == "invalid_cookie":
             label = "cookie.txt を読み取れません"
         else:
@@ -870,27 +854,16 @@ class App(tk.Tk):
             return
         saved_path = cookie_file_path()
         dlg = LoginDialog(
-            self, current=self._session,
-            saved_path=saved_path, saved_exists=has_saved_session(saved_path),
+            self, saved_path=saved_path, saved_exists=has_saved_session(saved_path),
         )
         self._login_dlg = dlg
         self.wait_window(dlg)
         self._login_dlg = None
 
-        if dlg.action == "ok":
-            self._session = dlg.value
+        if dlg.action == "save":
             self._relogin_needed = False
-            if dlg.save_requested:
-                self._save_session(dlg.value)
-            else:
-                self.set_status("ログイン設定を更新しました。")
-            self.update_login_indicator()
-        elif dlg.action == "clear":
-            self._session = None
-            self._relogin_needed = False
-            self.update_login_indicator()
-            self.set_status("ログイン設定をクリアしました。")
-        elif dlg.action == "delete_saved":
+            self._save_session(dlg.value)
+        elif dlg.action == "delete":
             self._delete_saved_session()
 
     def _save_session(self, value):
@@ -901,7 +874,8 @@ class App(tk.Tk):
                 "保存できません", f"cookie.txt に保存できませんでした:\n{e}",
             )
             return
-        self.set_status(f"ログイン設定を保存しました（{os.path.basename(path)}）。")
+        self.update_login_indicator()
+        self.set_status(f"ログイン情報を保存しました（{os.path.basename(path)}）。")
 
     def _delete_saved_session(self):
         try:
@@ -913,8 +887,8 @@ class App(tk.Tk):
             return
         self.update_login_indicator()
         self.set_status(
-            "保存済みの cookie.txt を削除しました。" if removed
-            else "保存済みの cookie.txt はありません。"
+            "ログイン情報を削除しました（cookie.txt）。" if removed
+            else "保存されたログイン情報はありません。"
         )
 
     def set_busy(self, busy):
@@ -967,25 +941,23 @@ class App(tk.Tk):
 
     def _ensure_session(self):
         """マイリスト用の user_session を用意する。無ければ設定ダイアログへ誘導し None を返す。"""
-        session, source = resolve_session(self._session)
+        session, source = resolve_session()
         self.update_login_indicator((session, source))
         if session:
             return session
 
         if source == "invalid_cookie":
             msg = ("cookie.txt から user_session を読み取れませんでした。\n"
-                   "「ログイン設定…」で user_session を入力してください。")
+                   "「ログイン設定…」で user_session を保存し直してください。")
         else:
             msg = ("マイリストの取得にはログイン設定が必要です。\n"
-                   "「ログイン設定…」から user_session を入力してください。")
+                   "「ログイン設定…」から user_session を保存してください。")
         self.set_status("ログイン設定が必要です。")
         if not messagebox.askyesno("ログイン設定が必要です", msg + "\n\n今すぐ設定を開きますか？"):
             return None
 
         self.open_login_dialog()
-        if self._session:
-            return self._session
-        session, _ = resolve_session(self._session)
+        session, _ = resolve_session()
         return session or None
 
     def on_abort(self):
@@ -1010,7 +982,7 @@ class App(tk.Tk):
                 if not session:
                     raise RuntimeError(
                         "マイリストの取得にはログイン設定が必要です。\n"
-                        "「ログイン設定…」から user_session を入力してください。"
+                        "「ログイン設定…」から user_session を保存してください。"
                     )
                 videos, total, reason = fetch_mylist(
                     ident, session, progress=self._progress,
@@ -1020,7 +992,7 @@ class App(tk.Tk):
             if e.code == 403 and kind == KIND_MYLIST:
                 self.after(0, self._mark_relogin)
                 msg = ("ログイン情報（user_session）が無効、または期限切れです（403）。\n"
-                       "ブラウザでログインし直し、「ログイン設定…」で値を入れ直してください。")
+                       "ブラウザでログインし直し、「ログイン設定…」で保存し直してください。")
             elif e.code == 404:
                 label = "シリーズ" if kind == KIND_SERIES else "マイリスト"
                 msg = f"{label}が見つかりません（404）。"
