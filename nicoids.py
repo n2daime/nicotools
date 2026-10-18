@@ -81,12 +81,18 @@ def pick_text_font(root, size=10):
 # ---------------------------------------------------------------------------
 # cookie.txt の読み込み
 # ---------------------------------------------------------------------------
+def cookie_file_path():
+    """保存先（`nicoids.py` と同じフォルダの `cookie.txt`）。"""
+    return os.path.join(script_dir(), "cookie.txt")
+
+
 def cookie_file_candidates():
-    name = "cookie.txt"
-    return [
-        os.path.join(script_dir(), name),
-        os.path.join(os.getcwd(), name),
-    ]
+    """cookie.txt の読み取り候補。
+
+    保存・削除・有無確認と同じ **`nicoids.py` と同じフォルダだけ**を見る
+    （カレントディレクトリは見ない）。読み書きの対象を1箇所に揃えるため。
+    """
+    return [cookie_file_path()]
 
 
 def extract_user_session(text):
@@ -171,11 +177,6 @@ def load_user_session(paths=None):
     return None, first_found
 
 
-def cookie_file_path():
-    """保存先（`nicoids.py` と同じフォルダの `cookie.txt`）。"""
-    return os.path.join(script_dir(), "cookie.txt")
-
-
 def has_saved_session(path=None):
     """保存済みの cookie.txt があるか。"""
     return os.path.isfile(path or cookie_file_path())
@@ -185,10 +186,13 @@ def save_user_session(value, path=None):
     """`user_session` を cookie.txt に保存する（平文・値のみ1行）。
 
     保存先は `nicoids.py` と同じフォルダに固定（任意パスは受け付けない）。
+    書き込みは一時ファイル経由で行い、途中で失敗しても既存の内容を壊さない。
     """
     path = path or cookie_file_path()
-    with open(path, "w", encoding="utf-8", newline="\n") as f:
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8", newline="\n") as f:
         f.write(value + "\n")
+    os.replace(tmp, path)
     return path
 
 
@@ -596,6 +600,7 @@ class LoginDialog(tk.Toplevel):
         self.title("ログイン設定")
         self.action = None      # "save" / "delete" / None（キャンセル）
         self.value = None       # action == "save" のときの正規化済み user_session
+        self._saved_exists = saved_exists
 
         body = ttk.Frame(self, padding=(12, 12, 12, 0))
         body.pack(fill="both", expand=True)
@@ -684,6 +689,12 @@ class LoginDialog(tk.Toplevel):
         self.value_var.set("")
 
     def _on_delete(self):
+        if self._saved_exists and not messagebox.askyesno(
+            "ログイン情報を削除",
+            "保存したログイン情報（cookie.txt）を削除します。\nよろしいですか？",
+            parent=self,
+        ):
+            return
         self.action = "delete"
         self.value = None
         self.destroy()
@@ -861,7 +872,6 @@ class App(tk.Tk):
         self._login_dlg = None
 
         if dlg.action == "save":
-            self._relogin_needed = False
             self._save_session(dlg.value)
         elif dlg.action == "delete":
             self._delete_saved_session()
@@ -874,6 +884,8 @@ class App(tk.Tk):
                 "保存できません", f"cookie.txt に保存できませんでした:\n{e}",
             )
             return
+        # 保存できた＝新しい値なので、再ログイン待ちを解除する
+        self._relogin_needed = False
         self.update_login_indicator()
         self.set_status(f"ログイン情報を保存しました（{os.path.basename(path)}）。")
 
@@ -885,6 +897,8 @@ class App(tk.Tk):
                 "削除できません", f"cookie.txt を削除できませんでした:\n{e}",
             )
             return
+        # 消したのに「要再ログイン」のままだと矛盾するので解除する
+        self._relogin_needed = False
         self.update_login_indicator()
         self.set_status(
             "ログイン情報を削除しました（cookie.txt）。" if removed

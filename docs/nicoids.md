@@ -121,11 +121,12 @@ on_fetch()
 | `http_get_json` / `http_get_text` | リトライ付き GET |
 | `extract_embedded_json(html)` | 検索ページの `<meta name="server-response">` を JSON 化 |
 | `normalize_search_url` / `set_query_param` | 検索URLのエンコードと `page` 付与 |
-| `extract_user_session` / `load_user_session` | `cookie.txt` から `user_session` を取り出す（`load_user_session(paths=)` でテスト用に検索先を差し替え可。値が無いファイルは飛ばして次の候補を試す） |
+| `extract_user_session` / `load_user_session` | `cookie.txt` から `user_session` を取り出す（`load_user_session(paths=)` でテスト用に検索先を差し替え可。既定の候補は `script_dir()/cookie.txt` **のみ**＝カレントディレクトリは見ない） |
+| `cookie_file_candidates` / `cookie_file_path` | 読み書きの対象。**保存・削除・有無確認・読み取りを同じ1箇所に揃える**ため `script_dir()/cookie.txt` だけ |
 | `is_user_session_value(value)` | `user_session_<数字>_<トークン>` 形式かの検証（ダイアログの入力チェック用） |
 | `resolve_session()` | cookie.txt から使う `user_session` を決める。`(value, source)` を返す（`"cookie"` / `"invalid_cookie"` / `None`） |
 | `cookie_file_path` / `has_saved_session` | 保存先（`script_dir()/cookie.txt`）と、保存済みの有無 |
-| `save_user_session` / `delete_saved_session` | `cookie.txt` への保存（平文・値のみ1行）と削除。保存先は固定で任意パスは受け付けない |
+| `save_user_session` / `delete_saved_session` | `cookie.txt` への保存（平文・値のみ1行・一時ファイル経由で置換）と削除。保存先は固定で任意パスは受け付けない |
 | `LoginDialog` | ログイン設定のモーダル。入力は `extract_user_session` で正規化し、`is_user_session_value` で形式検証（不一致は警告して閉じない）。`action`（`"save"`/`"delete"`/`None`）と `value` で結果を返す |
 | `App._ensure_session` / `update_login_indicator` / `open_login_dialog` / `_save_session` / `_delete_saved_session` | mylist 実行前の解決・状態ラベル更新・ダイアログの多重生成防止つき表示・保存/削除の実行 |
 | `format_duration` / `format_count` / `sanitize_cell` / `strip_prefix` | 表示用の整形 |
@@ -231,3 +232,5 @@ app = n.App(); app.update_idletasks(); app.destroy()
   3ボタンに整理（`OK`＋チェックボックスの二重表現をやめた。`クリア` は入力欄の右へ移動）。
   メモリ上だけのセッションを廃止し、`cookie.txt` に一本化（`resolve_session` から `gui_value` を削除）。
   入力欄を 96 文字幅に拡大し、ダイアログをリサイズ可能にした。
+- `cookie.txt` の読み書きを `script_dir()` の1箇所に統一（カレントディレクトリは見ない）。
+  保存は一時ファイル経由の置換にし、403 後の保存/削除で「要再ログイン」表示を正しく解除する。

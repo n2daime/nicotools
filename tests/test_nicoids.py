@@ -161,6 +161,10 @@ class SavedSessionTest(unittest.TestCase):
     def test_cookie_file_path_is_next_to_script(self):
         self.assertEqual(n.cookie_file_path(), os.path.join(n.script_dir(), "cookie.txt"))
 
+    def test_read_candidates_are_script_dir_only(self):
+        # 読み書きの対象を1箇所（nicoids.py と同じフォルダ）に揃える
+        self.assertEqual(n.cookie_file_candidates(), [n.cookie_file_path()])
+
 
 class ResolveSessionTest(unittest.TestCase):
     def test_cookie(self):
@@ -385,9 +389,28 @@ class GuiSmokeTest(unittest.TestCase):
     def test_dialog_delete(self):
         dlg = n.LoginDialog(self.app, saved_exists=True)
         self.app.update_idletasks()
-        dlg._on_delete()
+        with mock.patch.object(n.messagebox, "askyesno", return_value=True) as ask:
+            dlg._on_delete()
+            self.assertTrue(ask.called)   # 保存済みがあるときは確認する
         self.assertEqual(dlg.action, "delete")
         self.assertIsNone(dlg.value)
+
+    def test_dialog_delete_declined_keeps_open(self):
+        dlg = n.LoginDialog(self.app, saved_exists=True)
+        self.app.update_idletasks()
+        with mock.patch.object(n.messagebox, "askyesno", return_value=False):
+            dlg._on_delete()
+        self.assertIsNone(dlg.action)
+        self.assertTrue(dlg.winfo_exists())
+        dlg.destroy()
+
+    def test_dialog_delete_without_saved_skips_confirm(self):
+        dlg = n.LoginDialog(self.app, saved_exists=False)
+        self.app.update_idletasks()
+        with mock.patch.object(n.messagebox, "askyesno") as ask:
+            dlg._on_delete()
+            self.assertFalse(ask.called)   # 保存が無ければ確認不要
+        self.assertEqual(dlg.action, "delete")
 
     def test_dialog_button_labels_are_explicit(self):
         dlg = n.LoginDialog(self.app)
@@ -453,6 +476,50 @@ class GuiSmokeTest(unittest.TestCase):
         self.assertTrue(delete.called)
         self.assertIn("削除しました", self.app.status_var.get())
 
+    def test_open_dialog_delete_clears_relogin(self):
+        # 回帰: 403 で「要再ログイン」のときに削除したら、表示も解除される
+        self.app._mark_relogin()
+        with mock.patch.object(n, "LoginDialog", return_value=_FakeDialog("delete")), \
+                mock.patch.object(self.app, "wait_window"), \
+                mock.patch.object(n, "delete_saved_session", return_value=True):
+            self.app.open_login_dialog()
+        self.assertFalse(self.app._relogin_needed)
+        self.assertNotIn("要再ログイン", self.app.login_state_var.get())
+
+    def test_open_dialog_save_success_clears_relogin(self):
+        self.app._mark_relogin()
+        with mock.patch.object(n, "LoginDialog",
+                               return_value=_FakeDialog("save", "user_session_1_ab")), \
+                mock.patch.object(self.app, "wait_window"), \
+                mock.patch.object(n, "save_user_session",
+                                  return_value=n.cookie_file_path()):
+            self.app.open_login_dialog()
+        self.assertFalse(self.app._relogin_needed)
+
+    def test_open_dialog_save_failure_keeps_relogin(self):
+        # 保存に失敗したのに「要再ログイン」が消えると、状態が嘘になる
+        self.app._mark_relogin()
+        with mock.patch.object(n, "LoginDialog",
+                               return_value=_FakeDialog("save", "user_session_1_ab")), \
+                mock.patch.object(self.app, "wait_window"), \
+                mock.patch.object(n, "save_user_session", side_effect=OSError("denied")), \
+                mock.patch.object(n.messagebox, "showerror") as err:
+            self.app.open_login_dialog()
+        self.assertTrue(err.called)
+        self.assertTrue(self.app._relogin_needed)
+
+    def test_delete_failure_shows_error(self):
+        with mock.patch.object(n, "delete_saved_session", side_effect=OSError("denied")), \
+                mock.patch.object(n.messagebox, "showerror") as err:
+            self.app._delete_saved_session()
+        self.assertTrue(err.called)
+
+    def test_save_failure_shows_error(self):
+        with mock.patch.object(n, "save_user_session", side_effect=OSError("denied")), \
+                mock.patch.object(n.messagebox, "showerror") as err:
+            self.app._save_session("user_session_1_ab")
+        self.assertTrue(err.called)
+
     def test_open_dialog_cancel_does_nothing(self):
         with mock.patch.object(n, "LoginDialog", return_value=_FakeDialog(None)), \
                 mock.patch.object(self.app, "wait_window"), \
@@ -469,6 +536,14 @@ class GuiSmokeTest(unittest.TestCase):
             ctor.return_value = _FakeDialog(None)
             self.app.open_login_dialog()
         self.assertTrue(ctor.call_args.kwargs["saved_exists"])
+
+    def test_open_dialog_passes_no_saved_state(self):
+        with mock.patch.object(n, "LoginDialog") as ctor, \
+                mock.patch.object(self.app, "wait_window"), \
+                mock.patch.object(n, "has_saved_session", return_value=False):
+            ctor.return_value = _FakeDialog(None)
+            self.app.open_login_dialog()
+        self.assertFalse(ctor.call_args.kwargs["saved_exists"])
 
     def test_open_dialog_no_duplicate(self):
         existing = _FakeDialog()

@@ -18,7 +18,7 @@ nicotools/
 ├─ README.md              ← 利用者向けの入口（公開ページ）
 ├─ LICENSE                ← MIT
 ├─ .gitignore             ← cookie.txt / 出力物 / __pycache__ 等を除外
-├─ cookie.txt             ← 任意。無くても GUI の「ログイン設定…」で代用可（コミット禁止）
+├─ cookie.txt             ← ログイン設定の保存先（GUI から作成。コミット禁止）
 ├─ nicoids.py             ← ツール: シリーズ/マイリスト/検索結果の動画情報エクスポート
 ├─ tests/
 │  └─ test_nicoids.py     ← 単体テスト（ネットワーク不要・ダミー値のみ）
