@@ -1,5 +1,5 @@
-# 認証情報（user_session を含むためコミット禁止）
-/cookie.txt
+# 認証情報（user_session を含むためコミット禁止。念のため全階層で除外）
+cookie.txt
 
 # Python
 __pycache__/

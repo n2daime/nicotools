@@ -101,7 +101,8 @@ on_fetch()
 | `http_get_json` / `http_get_text` | リトライ付き GET |
 | `extract_embedded_json(html)` | 検索ページの `<meta name="server-response">` を JSON 化 |
 | `normalize_search_url` / `set_query_param` | 検索URLのエンコードと `page` 付与 |
-| `extract_user_session` / `load_user_session` | `cookie.txt` から `user_session` を取り出す（`load_user_session(paths=)` でテスト用に検索先を差し替え可） |
+| `extract_user_session` / `load_user_session` | `cookie.txt` から `user_session` を取り出す（`load_user_session(paths=)` でテスト用に検索先を差し替え可。値が無いファイルは飛ばして次の候補を試す） |
+| `is_user_session_value(value)` | `user_session_<数字>_<トークン>` 形式かの検証（ダイアログの入力チェック用） |
 | `resolve_session(gui_value)` | 使う `user_session` を決める。`(value, source)` を返す（`"gui"` / `"cookie"` / `"invalid_cookie"` / `None`）。**純粋関数的でテストしやすい** |
 | `LoginDialog` | ログイン設定のモーダル。入力は `extract_user_session` で正規化。`action`（`"ok"`/`"clear"`/`None`）と `value` で結果を返す |
 | `App._ensure_session` / `update_login_indicator` / `open_login_dialog` | mylist 実行前の解決・状態ラベル更新・ダイアログの多重生成防止つき表示 |
@@ -178,13 +179,15 @@ v, t, r = n.fetch_search(url, should_stop=lambda: True)  # 1ページで r="canc
 n.format_duration(1420)      # "23:40"
 n.format_duration(3661)      # "1:01:01"
 n.extract_user_session("user_session=user_session_1234_xxx")  # "user_session_1234_xxx"
-n.resolve_session(None)      # (値, "cookie") / (None, None) など
+n.resolve_session(None)[1]   # "cookie" / "invalid_cookie" / None（source だけ見る）
 
 # GUI スモークテスト
 app = n.App(); app.update_idletasks(); app.destroy()
 ```
 
 - 取得関数は GUI を挟まず単体で呼べる。**実トークンをスクリプトに直書きしない**。
+- `resolve_session(None)` の**値**を print すると、実 `cookie.txt` がある環境では実トークンが
+  出力に残る。確認は `[1]`（source）だけを見るなど、**値を出さない**こと。
 - 日本語の確認は Windows コンソールだと文字化けするので、**結果をファイルに書いて確認**する。
 
 ## 7. 変更履歴

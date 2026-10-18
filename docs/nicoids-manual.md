@@ -72,6 +72,9 @@ python nicoids.py
 - `user_session=` 付き … `user_session=user_session_12345678_xxxxxxxx…`
 - Cookie の行をまるごとコピーしたもの
 
+> `user_session` を含まない文字列（別サイトの Cookie や URL など）を貼った場合は、
+> 「読み取れません」と表示されて設定は変わりません。値をコピーし直してください。
+
 > **注意**
 > - この値は「あなたのログイン情報そのもの」です。
 >   **人に見せたり、GitHub などにアップロードしたりしないでください。**
@@ -114,7 +117,6 @@ user_session_12345678_xxxxxxxxxxxxxxxxxxxxxxxx
 ## 4. 貼り付けられる URL
 
 | 貼り付けるもの | 例 | ログイン設定 |
-|---|---|---|
 |---|---|---|
 | シリーズのページ | `https://www.nicovideo.jp/series/62864` | 不要 |
 | シリーズの番号だけ | `62864` | 不要 |

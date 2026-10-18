@@ -21,14 +21,18 @@ X-Frontend-Version: 0
 - `X-Frontend-Id`（小文字 d）でも通る（HTTP ヘッダは大文字小文字を区別しない）。
 - 認証が要る API は上に加えて `Cookie: user_session=<値>` を付ける。
 
-### 1.2 認証（cookie.txt と user_session）
+### 1.2 認証（user_session）
 
 - ログインセッションの Cookie は **名前 `user_session`**、**値は `user_session_<数字>_<トークン>`** という形式。
-  - 例: `Cookie: user_session=user_session_83033_xxxxxxxx...`
-- このリポジトリでは **`cookie.txt` に「値のみ」を1行で保存**する運用（他ツールと共用）。
-  - `cookie.txt` の中身例: `user_session_83033_xxxxxxxx...`
-  - 実装は `user_session=...` / Netscape形式 / Cookieヘッダ文字列も解釈できるようにしてある（`extract_user_session`）。
+  - 例: `Cookie: user_session=user_session_12345678_xxxxxxxx...`
+- `nicoids.py` では **GUI の「ログイン設定…」で入力した値を優先**して使う（メモリ上のみ・ファイルに保存しない）。
+  - 貼り付けは「値のみ」「`user_session=...`」「Cookieヘッダ全体」のどれでもよい（`extract_user_session`）。
+  - ダイアログ経路では `is_user_session_value` で `user_session_<数字>_<トークン>` 形式を検証する。
+- **`cookie.txt` は任意のフォールバック**（GUI 入力が空のときだけ読む。`resolve_session`）。
+  - 置く場合は **値のみを1行**で保存する運用。中身例: `user_session_12345678_xxxxxxxx...`
+  - `user_session=...` / Netscape形式 / Cookieヘッダ文字列も解釈できる。
 - **`cookie.txt` は絶対にコミットしない**（`.gitignore` 済み）。値は有効なログイン資格情報そのもの。
+- **セッション値をログ・ステータス・例外メッセージ・確認コマンドの出力に出さない**（AGENTS.md 参照）。
 - 無効・期限切れの場合は API が **HTTP 403 `FORBIDDEN`** を返す。
 
 ### 1.3 リトライ

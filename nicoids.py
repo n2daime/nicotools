@@ -127,32 +127,48 @@ def extract_user_session(text):
     return None
 
 
+_USER_SESSION_VALUE_RE = re.compile(r"^user_session_\d+_[A-Za-z0-9_\-]+$")
+
+
+def is_user_session_value(value):
+    """user_session_<数字>_<トークン> 形式かどうか。
+
+    GUI から貼り付けた値の検証用。`extract_user_session` の「1行ならそのまま」
+    フォールバックが緩いので、ダイアログ経路ではここで形式を確認する。
+    """
+    return bool(value) and bool(_USER_SESSION_VALUE_RE.match(value))
+
+
 def load_user_session(paths=None):
     """cookie.txt から user_session を読み取る。
 
     戻り値: (value, path)
-      - 見つかった       : (値, パス)
-      - あるが値が無い   : (None, パス)
-      - ファイルが無い   : (None, None)
+      - 見つかった         : (値, パス)
+      - あるが値が無い     : (None, パス)
+      - ファイルが無い     : (None, None)
 
+    複数の候補を順に試し、値が取れた最初のファイルを使う。
     paths を渡すと検索先を差し替えられる（テスト用）。
     """
+    first_found = None
     for path in (cookie_file_candidates() if paths is None else paths):
-        if os.path.isfile(path):
-            try:
-                with open(path, "r", encoding="utf-8-sig") as f:
-                    text = f.read()
-            except UnicodeDecodeError:
-                with open(path, "r", encoding="cp932", errors="replace") as f:
-                    text = f.read()
-            except OSError:
-                # 権限エラー等。起動を止めないよう「読み取れない」として扱う。
-                return None, path
-            value = extract_user_session(text)
-            if value:
-                return value, path
-            return None, path
-    return None, None
+        if not os.path.isfile(path):
+            continue
+        if first_found is None:
+            first_found = path
+        try:
+            with open(path, "r", encoding="utf-8-sig") as f:
+                text = f.read()
+        except UnicodeDecodeError:
+            with open(path, "r", encoding="cp932", errors="replace") as f:
+                text = f.read()
+        except OSError:
+            # 権限エラー等。起動を止めないよう、この候補は飛ばす。
+            continue
+        value = extract_user_session(text)
+        if value:
+            return value, path
+    return None, first_found
 
 
 def resolve_session(gui_value):
@@ -579,7 +595,8 @@ class LoginDialog(tk.Toplevel):
 
         ttk.Label(
             body, justify="left", foreground="#666666",
-            text=("「クリア」すると、同じフォルダの cookie.txt を使います。\n"
+            text=("「クリア」すると、ログイン設定は未設定に戻ります\n"
+                  "（同じフォルダに cookie.txt があれば、それを使います）。\n"
                   "この値はファイルに保存されません（ツールを閉じると消えます）。"),
         ).pack(anchor="w", pady=(8, 0))
 
@@ -590,7 +607,7 @@ class LoginDialog(tk.Toplevel):
         ttk.Button(btns, text="OK", command=self._on_ok).pack(side="right", padx=(0, 6))
 
         self.bind("<Return>", lambda e: self._on_ok())
-        self.bind("<Escape>", lambda e: self._on_cancel)
+        self.bind("<Escape>", lambda e: self._on_cancel())
         self.protocol("WM_DELETE_WINDOW", self._on_cancel)
 
         self.transient(master)
@@ -611,11 +628,11 @@ class LoginDialog(tk.Toplevel):
             )
             return
         value = extract_user_session(raw)
-        if not value:
+        if not is_user_session_value(value):
             messagebox.showwarning(
                 "読み取れません",
                 "貼り付けた文字列から user_session を読み取れませんでした。\n"
-                "値をもう一度コピーし直してください。",
+                "「user_session_…」で始まる値か、Cookie の行をコピーし直してください。",
                 parent=self,
             )
             return
@@ -639,13 +656,14 @@ class App(tk.Tk):
         super().__init__()
         self.title("ニコニコ動画 ID エクスポート")
         self.geometry("660x520")
-        self.minsize(560, 420)
+        self.minsize(620, 420)   # 「ログイン設定…」＋状態ラベルを右端に置くため余裕を持たせる
 
         self._busy = False
         self._videos = []
         self._cancel = threading.Event()
         self._session = None       # GUI で入力された user_session（メモリ上のみ）
         self._login_dlg = None     # ログイン設定ダイアログ（多重生成防止）
+        self._relogin_needed = False  # 403 を受けて再ログイン待ちかどうか
 
         top = ttk.Frame(self, padding=(10, 10, 10, 0))
         top.pack(side="top", fill="x")
@@ -769,9 +787,15 @@ class App(tk.Tk):
     def set_status(self, msg):
         self.status_var.set(msg)
 
-    def update_login_indicator(self):
-        """ログイン状態ラベルを、今どちらの user_session が使われるかに合わせる。"""
-        value, source = resolve_session(self._session)
+    def update_login_indicator(self, resolved=None):
+        """ログイン状態ラベルを、今どちらの user_session が使われるかに合わせる。
+
+        resolved に (value, source) を渡すと、その結果を使って再解決を省く。
+        """
+        if self._relogin_needed:
+            self.login_state_var.set("ログイン: 要再ログイン")
+            return
+        value, source = resolve_session(self._session) if resolved is None else resolved
         if value:
             label = "設定済み（入力）" if source == "gui" else "設定済み（cookie.txt）"
         elif source == "invalid_cookie":
@@ -792,12 +816,14 @@ class App(tk.Tk):
         self._login_dlg = None
         if dlg.action == "ok":
             self._session = dlg.value
+            self._relogin_needed = False
             self.update_login_indicator()
             self.set_status("ログイン設定を更新しました。")
         elif dlg.action == "clear":
             self._session = None
+            self._relogin_needed = False
             self.update_login_indicator()
-            self.set_status("ログイン設定をクリアしました（cookie.txt を使います）。")
+            self.set_status("ログイン設定をクリアしました。")
 
     def set_busy(self, busy):
         self._busy = busy
@@ -849,8 +875,8 @@ class App(tk.Tk):
 
     def _ensure_session(self):
         """マイリスト用の user_session を用意する。無ければ設定ダイアログへ誘導し None を返す。"""
-        self.update_login_indicator()
         session, source = resolve_session(self._session)
+        self.update_login_indicator((session, source))
         if session:
             return session
 
@@ -865,6 +891,8 @@ class App(tk.Tk):
             return None
 
         self.open_login_dialog()
+        if self._session:
+            return self._session
         session, _ = resolve_session(self._session)
         return session or None
 
@@ -914,7 +942,8 @@ class App(tk.Tk):
         self.after(0, self._success, videos, total, reason)
 
     def _mark_relogin(self):
-        self.login_state_var.set("ログイン: 要再ログイン")
+        self._relogin_needed = True
+        self.update_login_indicator()
 
     def _progress(self, msg):
         self.after(0, self.set_status, msg)
@@ -923,6 +952,9 @@ class App(tk.Tk):
         self._videos = videos
         self.render()
         self.set_busy(False)
+        # 取得成功＝今のログイン情報は有効なので、再ログイン待ちを解除する
+        self._relogin_needed = False
+        self.update_login_indicator()
         count = len(videos)
         if reason == "cancelled":
             self.set_status(f"中断しました（{count}件）。")
