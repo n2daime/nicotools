@@ -558,8 +558,9 @@ def format_count(value):
 class LoginDialog(tk.Toplevel):
     """マイリスト取得に使う user_session を入力するモーダルダイアログ。
 
-    - 貼り付けた文字列は extract_user_session() で正規化する
-      （値のみ / user_session=… / Cookie ヘッダ全体、いずれでも可）。
+    - 貼り付けた文字列は extract_user_session() で正規化し、
+      is_user_session_value() で user_session_<数字>_<トークン> 形式かを検証する
+      （値のみ / user_session=… / Cookie ヘッダ全体、いずれでも可。形式違いは警告して閉じない）。
     - 値はメモリ上でのみ扱い、ファイルには保存しない。
     - 確定後に self.action（"ok" / "clear" / None）と self.value を見る。
     """
@@ -939,7 +940,7 @@ class App(tk.Tk):
         except Exception as e:  # noqa: BLE001
             self._fail(f"エラー: {e}")
             return
-        self.after(0, self._success, videos, total, reason)
+        self.after(0, self._success, kind, videos, total, reason)
 
     def _mark_relogin(self):
         self._relogin_needed = True
@@ -948,13 +949,14 @@ class App(tk.Tk):
     def _progress(self, msg):
         self.after(0, self.set_status, msg)
 
-    def _success(self, videos, total=None, reason=None):
+    def _success(self, kind, videos, total=None, reason=None):
         self._videos = videos
         self.render()
         self.set_busy(False)
-        # 取得成功＝今のログイン情報は有効なので、再ログイン待ちを解除する
-        self._relogin_needed = False
-        self.update_login_indicator()
+        if kind == KIND_MYLIST:
+            # マイリストの取得成功＝今のログイン情報は有効なので、再ログイン待ちを解除する
+            self._relogin_needed = False
+            self.update_login_indicator()
         count = len(videos)
         if reason == "cancelled":
             self.set_status(f"中断しました（{count}件）。")

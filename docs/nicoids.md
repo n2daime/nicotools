@@ -104,7 +104,7 @@ on_fetch()
 | `extract_user_session` / `load_user_session` | `cookie.txt` から `user_session` を取り出す（`load_user_session(paths=)` でテスト用に検索先を差し替え可。値が無いファイルは飛ばして次の候補を試す） |
 | `is_user_session_value(value)` | `user_session_<数字>_<トークン>` 形式かの検証（ダイアログの入力チェック用） |
 | `resolve_session(gui_value)` | 使う `user_session` を決める。`(value, source)` を返す（`"gui"` / `"cookie"` / `"invalid_cookie"` / `None`）。**純粋関数的でテストしやすい** |
-| `LoginDialog` | ログイン設定のモーダル。入力は `extract_user_session` で正規化。`action`（`"ok"`/`"clear"`/`None`）と `value` で結果を返す |
+| `LoginDialog` | ログイン設定のモーダル。入力は `extract_user_session` で正規化し、`is_user_session_value` で形式検証（不一致は警告して閉じない）。`action`（`"ok"`/`"clear"`/`None`）と `value` で結果を返す |
 | `App._ensure_session` / `update_login_indicator` / `open_login_dialog` | mylist 実行前の解決・状態ラベル更新・ダイアログの多重生成防止つき表示 |
 | `format_duration` / `format_count` / `sanitize_cell` / `strip_prefix` | 表示用の整形 |
 | `pick_text_font` | 結果欄のフォント自動選択 |

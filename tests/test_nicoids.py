@@ -436,6 +436,22 @@ class GuiSmokeTest(unittest.TestCase):
         self.assertFalse(fetch.called)
         self.assertIn("ログイン設定", fail.call_args[0][0])
 
+    def test_worker_mylist_success_clears_relogin(self):
+        self.app._relogin_needed = True
+        with mock.patch.object(n, "fetch_mylist", return_value=([], None, None)):
+            self.app._worker(n.KIND_MYLIST, "1", None, "user_session_1_ab")
+            self.app.update()
+        self.assertFalse(self.app._relogin_needed)
+
+    def test_worker_series_success_keeps_relogin(self):
+        # 認証不要の取得で「要再ログイン」が消えないこと
+        self.app._mark_relogin()
+        with mock.patch.object(n, "fetch_series", return_value=([], None, None)):
+            self.app._worker(n.KIND_SERIES, "62864", None, None)
+            self.app.update()
+        self.assertTrue(self.app._relogin_needed)
+        self.assertEqual(self.app.login_state_var.get(), "ログイン: 要再ログイン")
+
     # -- _ensure_session ---------------------------------------------------
     def test_ensure_session_returns_existing(self):
         with mock.patch.object(n, "resolve_session", return_value=("user_session_1_ab", "gui")):
