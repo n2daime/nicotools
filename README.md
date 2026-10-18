@@ -20,7 +20,7 @@ Python の標準ライブラリだけで動きます（追加インストール�
 ### git で使う
 
 ```powershell
-git clone <このリポジトリのURL>
+git clone https://github.com/n2daime/nicotools.git
 cd nicotools
 python nicoids.py
 ```
