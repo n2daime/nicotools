@@ -1,0 +1,50 @@
+name: Release
+
+# タグ（v1.0.0 など）を push すると、テスト後にリリースを作成して
+# nicoids.py を添付する。docs/ tests/ AGENTS.md は添付しない。
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: タグと __version__ の整合を確認
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          ver="$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' nicoids.py)"
+          echo "tag=$tag / __version__=$ver"
+          if [ -z "$ver" ]; then
+            echo "::error::nicoids.py から __version__ を読み取れませんでした。"
+            exit 1
+          fi
+          if [ "$tag" != "$ver" ]; then
+            echo "::error::タグ ($tag) と nicoids.py の __version__ ($ver) が一致しません。"
+            exit 1
+          fi
+
+      - name: 単体テスト
+        run: python -m unittest discover -s tests
+
+      - name: リリースを作成（nicoids.py を添付）
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" nicoids.py \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes

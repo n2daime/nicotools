@@ -14,8 +14,13 @@ Python の標準ライブラリだけで動きます（追加インストール�
 
 ### ダウンロードして使う
 
-1. このページの **Code → Download ZIP** でダウンロードして展開します。
-2. `nicoids.py` をダブルクリック（または `python nicoids.py`）で起動します。
+必要なファイルは **`nicoids.py` の1つだけ**です。
+
+1. **[Releases（最新版）](https://github.com/n2daime/nicotools/releases/latest)** を開きます。
+2. 配布ファイル **`nicoids.py`** をダウンロードします。
+3. `nicoids.py` をダブルクリック（または `python nicoids.py`）で起動します。
+
+> `docs/` や `tests/` は開発用です。使うだけなら必要ありません。
 
 ### git で使う
 
@@ -25,7 +30,7 @@ cd nicotools
 python nicoids.py
 ```
 
-小さなウィンドウが開けば成功です。
+小さなウィンドウが開けば成功です（タイトルバーにバージョンが出ます）。
 
 ## 使い方（3ステップ）
 

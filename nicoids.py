@@ -13,6 +13,12 @@
 標準ライブラリのみで動作します（tkinter / urllib）。
 """
 
+# Copyright (c) 2026 2daime (https://github.com/n2daime)
+# MIT License. 全文は同梱の LICENSE、または
+# https://github.com/n2daime/nicotools/blob/main/LICENSE を参照。
+
+__version__ = "1.0.0"
+
 import html
 import json
 import os
@@ -708,7 +714,7 @@ class LoginDialog(tk.Toplevel):
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("ニコニコ動画 ID エクスポート")
+        self.title(f"ニコニコ動画 ID エクスポート v{__version__}")
         self.geometry("660x520")
         self.minsize(620, 420)   # 「ログイン設定…」＋状態ラベルを右端に置くため余裕を持たせる
 

@@ -18,6 +18,9 @@ nicotools/
 ├─ README.md              ← 利用者向けの入口（公開ページ）
 ├─ LICENSE                ← MIT
 ├─ .gitignore             ← cookie.txt / 出力物 / __pycache__ 等を除外
+├─ .github/
+│  └─ workflows/
+│     └─ release.yml      ← タグ push でリリースを自動発行（nicoids.py を添付）
 ├─ cookie.txt             ← ログイン設定の保存先（GUI から作成。コミット禁止）
 ├─ nicoids.py             ← ツール: シリーズ/マイリスト/検索結果の動画情報エクスポート
 ├─ tests/
@@ -27,6 +30,9 @@ nicotools/
    ├─ nicoids.md          ← nicoids.py の仕様・設計メモ・テスト手順（開発者向け）
    └─ nicoids-manual.md   ← nicoids.py の使い方ガイド（利用者向け）
 ```
+
+**配布物（リリースに添付するもの）は `nicoids.py` だけ。**
+`docs/` `tests/` `AGENTS.md` は開発用で、利用者には渡さない（「リリース手順」参照）。
 
 ## ナレッジへの導線
 
@@ -80,3 +86,33 @@ python nicoids.py          # GUI が起動する（リポジトリ直下で）
   （うっかり出力してしまったら、ニコニコからログアウト→再ログインでセッションを無効化する。）
 - GUI のスモークテストは `App()` を生成 → `update()` → `destroy()` で行える（`tests/` にも入っている）。
 - シリーズは認証不要のため、疎通確認の定番として `series/228685`（16件）を使うとよい。
+
+## リリース手順
+
+配布するのは **`nicoids.py` だけ**。タグを push すると GitHub Actions
+（[`.github/workflows/release.yml`](.github/workflows/release.yml)）がテストを実行し、
+成功したら `nicoids.py` を添付したリリースを自動で作る。
+
+1. `nicoids.py` の `__version__` を上げる（例: `1.0.0` → `1.1.0`）。
+2. `docs/nicoids-manual.md` の変更履歴に追記する。
+3. `python -m unittest discover -s tests` を通す。
+4. `main` にコミットして push する。
+5. **タグを打って push する**（ここで Actions が動く）。
+
+   ```powershell
+   git tag v1.1.0
+   git push origin v1.1.0
+   ```
+
+6. `gh run watch` で結果を確認し、Releases に `nicoids.py` が付いたことを見る。
+
+- **タグ（`v1.1.0`）と `__version__`（`1.1.0`）が一致しないとリリースは失敗する**（付け忘れ防止）。
+- 失敗したらタグを消してやり直す: `git push origin :v1.1.0` → `git tag -d v1.1.0` → 直して再 push。
+- 手元で同じことをする場合:
+
+  ```powershell
+  gh release create v1.1.0 nicoids.py --title v1.1.0 --generate-notes
+  ```
+
+- README のダウンロード導線は `releases/latest` を指しているので、リリースを出せば自動で最新になる。
+- 配布物には `LICENSE` を含めない代わりに、`nicoids.py` の先頭に著作権と MIT の案内を書いている。
