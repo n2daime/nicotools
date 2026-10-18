@@ -12,18 +12,20 @@ API や認証の前提は [`nicovideo-api.md`](nicovideo-api.md) を参照。
 | 入力 | 説明 | 認証 |
 |---|---|---|
 | `/series/{id}` または数字ID | シリーズの動画一覧 | 不要 |
-| `/mylist/{id}`・`/user/{uid}/mylist/{id}` | マイリストの動画一覧 | **必要**（`cookie.txt`） |
+| `/mylist/{id}`・`/user/{uid}/mylist/{id}` | マイリストの動画一覧 | **必要**（ログイン設定 or `cookie.txt`） |
 | `/tag/...`・`/search/...` | 検索結果の動画一覧 | 不要 |
 
 - 種類は「自動判定」のままで URL から判別する（数字のみはシリーズ扱い）。
 - 取得 → 結果を一覧表示 → **コピー** / **ファイルに保存**。
 - **最大件数**の指定、および取得中の **中断**（ここまでの結果を表示）。
+- マイリストの認証は **GUI の「ログイン設定…」で `user_session` を入力**する方式（メモリ上のみ・ファイルに保存しない）。
+  未入力なら同フォルダの `cookie.txt` をフォールバックとして読む（`resolve_session`：GUI 入力 > cookie.txt）。
 
 ## 2. 画面と操作
 
 ```
 URL: [.............................................] [取得] [中断]
-種類: [自動判定▼]   □ 数値のみ (so/sm を外す)
+種類: [自動判定▼]   □ 数値のみ (so/sm を外す)          [ログイン設定…] ログイン: 未設定
 出力形式: (●)TSV（詳細） ( )IDのみ   □ ヘッダ行を付ける
 最大件数: [    ] 件 （空欄＝制限なし／検索は約5,000件が上限）
 ┌──────────────────────────────────────────────────┐
@@ -32,6 +34,9 @@ URL: [.............................................] [取得] [中断]
 [コピー] [ファイルに保存]
 状態: 12件取得しました。
 ```
+
+「ログイン設定…」は `LoginDialog`（モーダル）を開く。状態ラベルは `未設定` / `設定済み（入力）` /
+`設定済み（cookie.txt）` / `cookie.txt を読み取れません` / `要再ログイン` を表示する。
 
 ### 出力形式
 
@@ -59,13 +64,18 @@ URL: [.............................................] [取得] [中断]
 ```
 on_fetch()
   ├ parse_target(text, 種類) → (kind, ident)   kind: "series" / "mylist" / "search"
+  ├ mylist のとき _ensure_session() → 無ければ誘導ダイアログ → open_login_dialog()
   ├ self._cancel.clear()
-  └ 別スレッドで _worker(kind, ident, max_items)
+  └ 別スレッドで _worker(kind, ident, max_items, session)
         └ fetch_series / fetch_mylist / fetch_search
               → (videos, total, reason)
         └ self.after(0, _success, videos, total, reason)   # UI更新は必ずメインスレッドで
   _success() → render() → 状態表示
 ```
+
+- `_ensure_session()` は **メインスレッドで** `resolve_session(self._session)` を評価する。
+  未設定ならスレッドを起こす前に設定ダイアログへ誘導し、`None` を返して取得を中止する。
+- セッション解決だけは `_worker` から追い出してある（未設定時に無駄なスレッドを作らないため）。
 
 ### 3.2 `fetch_*` の戻り値（共通契約）
 
@@ -91,7 +101,10 @@ on_fetch()
 | `http_get_json` / `http_get_text` | リトライ付き GET |
 | `extract_embedded_json(html)` | 検索ページの `<meta name="server-response">` を JSON 化 |
 | `normalize_search_url` / `set_query_param` | 検索URLのエンコードと `page` 付与 |
-| `extract_user_session` / `load_user_session` | `cookie.txt` から `user_session` を取り出す |
+| `extract_user_session` / `load_user_session` | `cookie.txt` から `user_session` を取り出す（`load_user_session(paths=)` でテスト用に検索先を差し替え可） |
+| `resolve_session(gui_value)` | 使う `user_session` を決める。`(value, source)` を返す（`"gui"` / `"cookie"` / `"invalid_cookie"` / `None`）。**純粋関数的でテストしやすい** |
+| `LoginDialog` | ログイン設定のモーダル。入力は `extract_user_session` で正規化。`action`（`"ok"`/`"clear"`/`None`）と `value` で結果を返す |
+| `App._ensure_session` / `update_login_indicator` / `open_login_dialog` | mylist 実行前の解決・状態ラベル更新・ダイアログの多重生成防止つき表示 |
 | `format_duration` / `format_count` / `sanitize_cell` / `strip_prefix` | 表示用の整形 |
 | `pick_text_font` | 結果欄のフォント自動選択 |
 
@@ -124,17 +137,34 @@ on_fetch()
 4. **中断はページの区切りでしか効かない**
    - `threading.Event` をループ先頭で確認する方式。1リクエストの途中では止まれない。
 
+5. **モーダルダイアログは `grab_set` と多重生成に注意**
+   - `LoginDialog` は `transient(self)` + `grab_set()` でモーダル化。`destroy()` で grab は自動解放される。
+   - `self._login_dlg` を保持し、`open_login_dialog()` 冒頭で `winfo_exists()` を確認して
+     二重に開かない（`wait_window` の入れ子を防ぐ）。
+   - 新しい行・ボタンを足すときは、既存の pack 順（落とし穴1）を崩さないこと。
+     「ログイン設定…」ボタンと状態ラベルは **`opts` 行の右端（`side="right"`）** に置いている。
+
 ## 5. 既知の制限
 
 - 検索結果は **157ページ（約5,024件）が上限**。それ以上はニコ動側がエラーを返す。
 - 検索は 32件/ページ固定なので、多件数は時間がかかる（上限指定・中断で短縮可能）。
-- マイリスト取得は `cookie.txt` が必須。403 のときはセッション切れを疑う。
+- マイリスト取得は認証が必須。GUI の「ログイン設定…」で `user_session` を入力するか、
+  `cookie.txt` を置く。403 のときはセッション切れを疑う（状態ラベルが `要再ログイン` になる）。
+- **複数アカウントは非対応**（`self._session` は単一）。セッションの事前有効性チェックも行わない
+  （403 を検知して再入力を促す方針）。
 - 検索ページの HTML 構造（`<meta name="server-response">`）に依存。仕様変更時は
   `extract_embedded_json` と `fetch_search` のパスを要修正。
+- 認証情報は**メモリ上のみ**で扱う。保存機能は意図的に用意していない。
 
 ## 6. テスト手順
 
-一時スクリプトを作って実行し、**確認後は削除**する（コミットしない）。
+**単体テストは `tests/` に常設**（ネットワーク不要・ダミー値のみ）。
+
+```powershell
+python -m unittest discover -s tests
+```
+
+**ネットワーク取得の疎通確認だけ**は一時スクリプトを作って実行し、**確認後は削除**する（コミットしない）。
 
 ```python
 import nicoids as n
@@ -144,16 +174,17 @@ v, t, r = n.fetch_series("62864")                 # 12件, r=None
 v, t, r = n.fetch_series("62864", max_items=5)    # 5件, r="max_items"
 v, t, r = n.fetch_search(url, should_stop=lambda: True)  # 1ページで r="cancelled"
 
-# 整形
+# 整形・認証解決
 n.format_duration(1420)      # "23:40"
 n.format_duration(3661)      # "1:01:01"
-n.extract_user_session("user_session_83033_xxx")  # "user_session_83033_xxx"
+n.extract_user_session("user_session=user_session_1234_xxx")  # "user_session_1234_xxx"
+n.resolve_session(None)      # (値, "cookie") / (None, None) など
 
 # GUI スモークテスト
 app = n.App(); app.update_idletasks(); app.destroy()
 ```
 
-- 取得関数は GUI を挟まず単体で呼べる。
+- 取得関数は GUI を挟まず単体で呼べる。**実トークンをスクリプトに直書きしない**。
 - 日本語の確認は Windows コンソールだと文字化けするので、**結果をファイルに書いて確認**する。
 
 ## 7. 変更履歴
@@ -163,3 +194,5 @@ app = n.App(); app.update_idletasks(); app.destroy()
 - 結果欄のフォント自動選択、ステータス行のレイアウト修正。
 - 検索結果URL（`/tag/`・`/search/`）対応（埋め込みJSONを利用）。
 - 最大件数の指定と中断機能を追加。
+- マイリストの認証を **GUI の「ログイン設定…」ダイアログ**方式に変更（`cookie.txt` は任意のフォールバック）。
+  認証解決を `resolve_session` に分離し、`tests/` を新設。公開向けに README / LICENSE を追加。

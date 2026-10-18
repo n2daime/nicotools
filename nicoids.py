@@ -2,7 +2,8 @@
 """ニコニコ動画のシリーズ / マイリスト / 検索結果から動画情報を書き出す GUI ツール。
 
 - シリーズ  : 認証不要（nvapi v2/series）
-- マイリスト: 同フォルダの cookie.txt から user_session を読み取って使用（nvapi v2/mylists）
+- マイリスト: 「ログイン設定」で入力した user_session を使用（nvapi v2/mylists）。
+              未入力なら同フォルダの cookie.txt をフォールバックとして読む。
 - 検索結果  : /tag/… ・ /search/… のページに埋め込まれた JSON を利用（認証不要）
 
 出力モード:
@@ -126,8 +127,17 @@ def extract_user_session(text):
     return None
 
 
-def load_user_session():
-    for path in cookie_file_candidates():
+def load_user_session(paths=None):
+    """cookie.txt から user_session を読み取る。
+
+    戻り値: (value, path)
+      - 見つかった       : (値, パス)
+      - あるが値が無い   : (None, パス)
+      - ファイルが無い   : (None, None)
+
+    paths を渡すと検索先を差し替えられる（テスト用）。
+    """
+    for path in (cookie_file_candidates() if paths is None else paths):
         if os.path.isfile(path):
             try:
                 with open(path, "r", encoding="utf-8-sig") as f:
@@ -135,10 +145,34 @@ def load_user_session():
             except UnicodeDecodeError:
                 with open(path, "r", encoding="cp932", errors="replace") as f:
                     text = f.read()
+            except OSError:
+                # 権限エラー等。起動を止めないよう「読み取れない」として扱う。
+                return None, path
             value = extract_user_session(text)
             if value:
                 return value, path
             return None, path
+    return None, None
+
+
+def resolve_session(gui_value):
+    """マイリスト取得に使う user_session を決める。
+
+    優先順: GUI 入力 > cookie.txt（任意のフォールバック）。
+
+    戻り値: (value, source)
+      source: "gui"            … GUI に入力された値を使う
+              "cookie"         … cookie.txt の値を使う
+              "invalid_cookie" … cookie.txt はあるが user_session を読み取れない
+              None             … どちらも無い
+    """
+    if gui_value:
+        return gui_value, "gui"
+    value, path = load_user_session()
+    if value:
+        return value, "cookie"
+    if path:
+        return None, "invalid_cookie"
     return None, None
 
 
@@ -505,6 +539,101 @@ def format_count(value):
 # ---------------------------------------------------------------------------
 # GUI
 # ---------------------------------------------------------------------------
+class LoginDialog(tk.Toplevel):
+    """マイリスト取得に使う user_session を入力するモーダルダイアログ。
+
+    - 貼り付けた文字列は extract_user_session() で正規化する
+      （値のみ / user_session=… / Cookie ヘッダ全体、いずれでも可）。
+    - 値はメモリ上でのみ扱い、ファイルには保存しない。
+    - 確定後に self.action（"ok" / "clear" / None）と self.value を見る。
+    """
+
+    def __init__(self, master, current=None):
+        super().__init__(master)
+        self.title("ログイン設定")
+        self.resizable(False, False)
+        self.action = None      # "ok" / "clear" / None（キャンセル）
+        self.value = None       # action == "ok" のときの正規化済み user_session
+
+        body = ttk.Frame(self, padding=(12, 12, 12, 0))
+        body.pack(fill="both", expand=True)
+
+        ttk.Label(
+            body, justify="left",
+            text=("マイリストの取得に使う user_session を入力します。\n"
+                  "ブラウザで F12 → Application → Cookies から user_session の値を\n"
+                  "コピーして貼り付けてください。\n"
+                  "「値のみ」「user_session=…」「Cookieヘッダ全体」のどれでもかまいません。"),
+        ).pack(anchor="w")
+
+        row = ttk.Frame(body, padding=(0, 8, 0, 0))
+        row.pack(fill="x")
+        self.value_var = tk.StringVar(value=current or "")
+        self.entry = ttk.Entry(row, textvariable=self.value_var, width=52, show="●")
+        self.entry.pack(side="left", fill="x", expand=True)
+
+        self.show_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            body, text="値を表示する", variable=self.show_var, command=self._toggle_show,
+        ).pack(anchor="w", pady=(4, 0))
+
+        ttk.Label(
+            body, justify="left", foreground="#666666",
+            text=("「クリア」すると、同じフォルダの cookie.txt を使います。\n"
+                  "この値はファイルに保存されません（ツールを閉じると消えます）。"),
+        ).pack(anchor="w", pady=(8, 0))
+
+        btns = ttk.Frame(self, padding=(12, 10, 12, 12))
+        btns.pack(fill="x")
+        ttk.Button(btns, text="クリア", command=self._on_clear).pack(side="left")
+        ttk.Button(btns, text="キャンセル", command=self._on_cancel).pack(side="right")
+        ttk.Button(btns, text="OK", command=self._on_ok).pack(side="right", padx=(0, 6))
+
+        self.bind("<Return>", lambda e: self._on_ok())
+        self.bind("<Escape>", lambda e: self._on_cancel)
+        self.protocol("WM_DELETE_WINDOW", self._on_cancel)
+
+        self.transient(master)
+        self.grab_set()
+        self.entry.focus_set()
+
+    def _toggle_show(self):
+        self.entry.configure(show="" if self.show_var.get() else "●")
+
+    def _on_ok(self):
+        raw = self.value_var.get().strip()
+        if not raw:
+            messagebox.showwarning(
+                "入力エラー",
+                "user_session を入力してください。\n"
+                "cookie.txt を使う場合は「クリア」を押してください。",
+                parent=self,
+            )
+            return
+        value = extract_user_session(raw)
+        if not value:
+            messagebox.showwarning(
+                "読み取れません",
+                "貼り付けた文字列から user_session を読み取れませんでした。\n"
+                "値をもう一度コピーし直してください。",
+                parent=self,
+            )
+            return
+        self.action = "ok"
+        self.value = value
+        self.destroy()
+
+    def _on_clear(self):
+        self.action = "clear"
+        self.value = None
+        self.destroy()
+
+    def _on_cancel(self):
+        self.action = None
+        self.value = None
+        self.destroy()
+
+
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -515,6 +644,8 @@ class App(tk.Tk):
         self._busy = False
         self._videos = []
         self._cancel = threading.Event()
+        self._session = None       # GUI で入力された user_session（メモリ上のみ）
+        self._login_dlg = None     # ログイン設定ダイアログ（多重生成防止）
 
         top = ttk.Frame(self, padding=(10, 10, 10, 0))
         top.pack(side="top", fill="x")
@@ -543,6 +674,12 @@ class App(tk.Tk):
             opts, text="数値のみ (so/sm を外す)", variable=self.numeric_var,
             command=self.render,
         ).pack(side="left")
+        self.login_state_var = tk.StringVar(value="ログイン: 未設定")
+        ttk.Label(opts, textvariable=self.login_state_var).pack(side="right", padx=(6, 0))
+        self.login_btn = ttk.Button(
+            opts, text="ログイン設定…", command=self.open_login_dialog,
+        )
+        self.login_btn.pack(side="right")
 
         opts2 = ttk.Frame(self, padding=(10, 4, 10, 0))
         opts2.pack(side="top", fill="x")
@@ -595,6 +732,8 @@ class App(tk.Tk):
         # 最後に中央の結果欄を配置して、余った領域を吸収させる
         mid.pack(side="top", fill="both", expand=True)
 
+        self.update_login_indicator()
+
     # -- helpers ----------------------------------------------------------
     def build_lines(self):
         numeric = self.numeric_var.get()
@@ -630,6 +769,36 @@ class App(tk.Tk):
     def set_status(self, msg):
         self.status_var.set(msg)
 
+    def update_login_indicator(self):
+        """ログイン状態ラベルを、今どちらの user_session が使われるかに合わせる。"""
+        value, source = resolve_session(self._session)
+        if value:
+            label = "設定済み（入力）" if source == "gui" else "設定済み（cookie.txt）"
+        elif source == "invalid_cookie":
+            label = "cookie.txt を読み取れません"
+        else:
+            label = "未設定"
+        self.login_state_var.set("ログイン: " + label)
+
+    def open_login_dialog(self):
+        """ログイン設定ダイアログを開く（多重生成しない）。"""
+        if self._login_dlg is not None and self._login_dlg.winfo_exists():
+            self._login_dlg.lift()
+            self._login_dlg.focus_set()
+            return
+        dlg = LoginDialog(self, current=self._session)
+        self._login_dlg = dlg
+        self.wait_window(dlg)
+        self._login_dlg = None
+        if dlg.action == "ok":
+            self._session = dlg.value
+            self.update_login_indicator()
+            self.set_status("ログイン設定を更新しました。")
+        elif dlg.action == "clear":
+            self._session = None
+            self.update_login_indicator()
+            self.set_status("ログイン設定をクリアしました（cookie.txt を使います）。")
+
     def set_busy(self, busy):
         self._busy = busy
         state = "disabled" if busy else "normal"
@@ -638,6 +807,7 @@ class App(tk.Tk):
         self.save_btn.configure(state=state)
         self.url_entry.configure(state=state)
         self.max_entry.configure(state=state)
+        self.login_btn.configure(state=state)
         self.abort_btn.configure(state=("normal" if busy else "disabled"))
 
     def get_max_items(self):
@@ -659,14 +829,44 @@ class App(tk.Tk):
             messagebox.showwarning("入力エラー", "URL または ID を入力してください。")
             return
         kind, ident = target
+
+        # マイリストは認証が要る。スレッドを起こす前に user_session を解決する。
+        session = None
+        if kind == KIND_MYLIST:
+            session = self._ensure_session()
+            if session is None:
+                return
+
         self._cancel.clear()
         self.set_busy(True)
         self.set_status("取得中…")
         self._videos = []
         self.render()
         threading.Thread(
-            target=self._worker, args=(kind, ident, self.get_max_items()), daemon=True,
+            target=self._worker, args=(kind, ident, self.get_max_items(), session),
+            daemon=True,
         ).start()
+
+    def _ensure_session(self):
+        """マイリスト用の user_session を用意する。無ければ設定ダイアログへ誘導し None を返す。"""
+        self.update_login_indicator()
+        session, source = resolve_session(self._session)
+        if session:
+            return session
+
+        if source == "invalid_cookie":
+            msg = ("cookie.txt から user_session を読み取れませんでした。\n"
+                   "「ログイン設定…」で user_session を入力してください。")
+        else:
+            msg = ("マイリストの取得にはログイン設定が必要です。\n"
+                   "「ログイン設定…」から user_session を入力してください。")
+        self.set_status("ログイン設定が必要です。")
+        if not messagebox.askyesno("ログイン設定が必要です", msg + "\n\n今すぐ設定を開きますか？"):
+            return None
+
+        self.open_login_dialog()
+        session, _ = resolve_session(self._session)
+        return session or None
 
     def on_abort(self):
         if not self._busy:
@@ -674,7 +874,7 @@ class App(tk.Tk):
         self._cancel.set()
         self.set_status("中断しています…（ここまでの結果を表示します）")
 
-    def _worker(self, kind, ident, max_items):
+    def _worker(self, kind, ident, max_items, session=None):
         try:
             if kind == KIND_SERIES:
                 videos, total, reason = fetch_series(
@@ -687,15 +887,10 @@ class App(tk.Tk):
                     should_stop=self._cancel.is_set, max_items=max_items,
                 )
             else:
-                session, path = load_user_session()
                 if not session:
-                    if path:
-                        raise RuntimeError(
-                            f"cookie.txt から user_session を読み取れませんでした:\n{path}"
-                        )
                     raise RuntimeError(
-                        "マイリストの取得には cookie.txt が必要です。\n"
-                        f"{os.path.join(script_dir(), 'cookie.txt')} に user_session の値を保存してください。"
+                        "マイリストの取得にはログイン設定が必要です。\n"
+                        "「ログイン設定…」から user_session を入力してください。"
                     )
                 videos, total, reason = fetch_mylist(
                     ident, session, progress=self._progress,
@@ -703,8 +898,9 @@ class App(tk.Tk):
                 )
         except urllib.error.HTTPError as e:
             if e.code == 403 and kind == KIND_MYLIST:
-                msg = ("cookie.txt の user_session が無効、または期限切れです（403）。\n"
-                       "ブラウザでログインし直し、cookie.txt を更新してください。")
+                self.after(0, self._mark_relogin)
+                msg = ("ログイン情報（user_session）が無効、または期限切れです（403）。\n"
+                       "ブラウザでログインし直し、「ログイン設定…」で値を入れ直してください。")
             elif e.code == 404:
                 label = "シリーズ" if kind == KIND_SERIES else "マイリスト"
                 msg = f"{label}が見つかりません（404）。"
@@ -716,6 +912,9 @@ class App(tk.Tk):
             self._fail(f"エラー: {e}")
             return
         self.after(0, self._success, videos, total, reason)
+
+    def _mark_relogin(self):
+        self.login_state_var.set("ログイン: 要再ログイン")
 
     def _progress(self, msg):
         self.after(0, self.set_status, msg)

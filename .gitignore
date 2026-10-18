@@ -5,5 +5,9 @@
 __pycache__/
 *.py[cod]
 
+# ツールの出力（保存ダイアログの既定名）
+/nicovideo.tsv
+/ids.txt
+
 # 一時ファイル
 _dump_*.txt

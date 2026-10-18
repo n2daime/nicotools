@@ -15,9 +15,13 @@
 ```
 nicotools/
 ├─ AGENTS.md              ← このファイル（入口・開発ルール）
-├─ .gitignore             ← cookie.txt / __pycache__ 等を除外
-├─ cookie.txt             ← 認証情報（コミット禁止・各自で用意）
+├─ README.md              ← 利用者向けの入口（公開ページ）
+├─ LICENSE                ← MIT
+├─ .gitignore             ← cookie.txt / 出力物 / __pycache__ 等を除外
+├─ cookie.txt             ← 任意。無くても GUI の「ログイン設定…」で代用可（コミット禁止）
 ├─ nicoids.py             ← ツール: シリーズ/マイリスト/検索結果の動画情報エクスポート
+├─ tests/
+│  └─ test_nicoids.py     ← 単体テスト（ネットワーク不要・ダミー値のみ）
 └─ docs/
    ├─ nicovideo-api.md    ← ニコ動 API / スクレイピングの再利用ナレッジ
    ├─ nicoids.md          ← nicoids.py の仕様・設計メモ・テスト手順（開発者向け）
@@ -45,19 +49,26 @@ nicotools/
 2. **1ツール = 1スクリプト**（例: `nicoids.py`）。共通化が必要になるまでは依存を増やさない。
 3. GUI は `tkinter`。日本語が正しく表示されるフォントを選ぶ（[`docs/nicoids.md`](docs/nicoids.md) の「GUIの落とし穴」参照）。
 4. ネットワーク取得は別スレッドで行い、GUI を固まらせない。中断（`threading.Event`）と件数上限に対応させる。
-5. 認証が要る機能はフォルダ直下の **`cookie.txt`** を読む（`user_session` の値のみ。詳細は API ナレッジ）。
+5. 認証が要る機能は、GUI の「ログイン設定…」で入力した **`user_session`** を優先して使う。
+   未入力ならフォルダ直下の **`cookie.txt`** をフォールバックとして読む（`resolve_session`）。
+   セッション値は**メモリ上でのみ**扱い、ログ・ステータス・例外メッセージに絶対に含めない。
 6. エラーは握りつぶさず、日本語で状態表示／ダイアログに出す。
 7. コミット前に `__pycache__` や一時ファイルを消す。`cookie.txt` が追跡されていないことを `git status` で確認する。
 
 ## 実行方法
 
 ```powershell
-cd T:\CodeProject\nicotools
-python nicoids.py          # GUI が起動する
+python nicoids.py          # GUI が起動する（リポジトリ直下で）
 ```
 
 ## 動作確認の基本
 
-- ネットワーク系の関数（`fetch_*` など）は GUI を挟まず単体で呼べる。テストは一時スクリプトを作って実行し、**終わったら削除**する。
-- GUI のスモークテストは `App()` を生成 → `update()` → `destroy()` で行える。
+- 整形・URL 解析・認証解決などの**単体テストは `tests/` に常設**。リポジトリ直下で実行する。
+
+  ```powershell
+  python -m unittest discover -s tests
+  ```
+
+- **ネットワーク取得の疎通確認だけ**は一時スクリプトを作って実行し、**終わったら削除**する（コミットしない）。実トークンはスクリプトに書かない。
+- GUI のスモークテストは `App()` を生成 → `update()` → `destroy()` で行える（`tests/` にも入っている）。
 - シリーズは認証不要のため、疎通確認の定番として `series/62864`（12件）を使うとよい。
