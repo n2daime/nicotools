@@ -190,7 +190,26 @@ data.response.$getSearchVideoV2.data
 | `count.like` | いいね数 |
 | `owner.id` / `owner.name` | 投稿者 / チャンネル |
 | `shortDescription` | 概要（冒頭） |
-| `thumbnail.url` ほか | サムネイルURL（複数サイズ） |
+| `thumbnail` | サムネイルURL群（下記 §5.1。2026-11 時点の実測で全取得元に同一形） |
+
+### 5.1 `thumbnail` オブジェクト（実測: シリーズ API・検索埋め込み JSON とも同一の 6 キー）
+
+```jsonc
+"thumbnail": {
+  "url":        "https://res-…/thumbnails/47034168/47034168.86587223",       // 基準（小）
+  "middleUrl":  "…/47034168.86587223.M",                                      // 中（.M サフィックス）
+  "largeUrl":   "…/47034168.86587223.L",                                      // 大（.L サフィックス）
+  "listingUrl": "…/47034168.86587223.M",                                      // 一覧用＝middleUrl と同一
+  "nHdUrl":     "…/47034168.86587223.original/r640x360l",                    // 横幅640（指定リサイズ）
+  "shortUrl":   null                                                          // 観測では常に null（キーは存在する）
+}
+```
+
+- 実質的な解像度は **base / .M / .L / r640x360（横幅640）の4段階**。`listingUrl` は `.M` の複製、`shortUrl` は null。
+- キー自体は揃っているが、**値が欠落する可能性は否定できない**（動画の状態による）。`nicoids.py` は
+  「指定サイズ → 高画質 → 低画質」の順にフォールバックし、どれも無ければ失敗として扱う。
+- `nicoids.py` で使うのは `url`（標準）/ `largeUrl`（高精細・既定）/ `nHdUrl`（超高精細）の3つだけ。
+  保存済みファイルのスキップと既定 0.5 秒の間隔で、NicoNico 側への負荷を抑えている。
 
 ---
 
