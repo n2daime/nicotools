@@ -286,6 +286,207 @@ class FormatTest(unittest.TestCase):
         self.assertEqual(n.strip_prefix("sm9"), "9")
         self.assertEqual(n.strip_prefix("123"), "123")
 
+    def test_parse_max_items(self):
+        self.assertIsNone(n.parse_max_items(""))
+        self.assertIsNone(n.parse_max_items("   "))
+        self.assertIsNone(n.parse_max_items("abc"))
+        self.assertIsNone(n.parse_max_items("0"))
+        self.assertIsNone(n.parse_max_items("-5"))
+        self.assertEqual(n.parse_max_items("50"), 50)
+        self.assertEqual(n.parse_max_items("1,000"), 1000)
+
+    def test_parse_interval(self):
+        self.assertEqual(n.parse_interval(""), n.THUMB_DEFAULT_INTERVAL)
+        self.assertEqual(n.parse_interval("abc"), n.THUMB_DEFAULT_INTERVAL)
+        self.assertEqual(n.parse_interval("nan"), n.THUMB_DEFAULT_INTERVAL)
+        self.assertEqual(n.parse_interval("1"), 1.0)
+        self.assertEqual(n.parse_interval("0.1"), n.THUMB_MIN_INTERVAL)
+        self.assertEqual(n.parse_interval("100"), n.THUMB_MAX_INTERVAL)
+
+
+# ---------------------------------------------------------------------------
+# サムネイル: 抽出・URL解決・ファイル名
+# ---------------------------------------------------------------------------
+def _thumb_dict(vid="so1"):
+    return {
+        "url": f"https://img.example.invalid/{vid}_std.jpg",
+        "largeUrl": f"https://img.example.invalid/{vid}_large.jpg",
+        "nHdUrl": f"https://img.example.invalid/{vid}_nhd.jpg",
+    }
+
+
+class ThumbnailExtractTest(unittest.TestCase):
+    def test_series_item_extracts_thumbnail(self):
+        item = {"meta": {"id": "so33963154"}, "video": {
+            "id": "so33963154", "title": "タイトル", "thumbnail": _thumb_dict("so33963154"),
+        }}
+        info = n._video_info_from_item(item)
+        self.assertEqual(info["thumbnail"]["largeUrl"],
+                         "https://img.example.invalid/so33963154_large.jpg")
+
+    def test_search_style_item_extracts_thumbnail(self):
+        # 検索の items[] は video でラップされていない形
+        item = {"id": "sm9", "title": "x", "thumbnail": _thumb_dict("sm9")}
+        info = n._video_info_from_item(item)
+        self.assertEqual(info["thumbnail"]["nHdUrl"],
+                         "https://img.example.invalid/sm9_nhd.jpg")
+
+    def test_missing_thumbnail_becomes_empty_dict(self):
+        info = n._video_info_from_item({"id": "sm9", "title": "x"})
+        self.assertEqual(info["thumbnail"], {"url": "", "largeUrl": "", "nHdUrl": ""})
+
+
+class ResolveThumbnailUrlTest(unittest.TestCase):
+    def _video(self, thumb):
+        return {"id": "so1", "thumbnail": thumb}
+
+    def test_each_size(self):
+        v = self._video(_thumb_dict("so1"))
+        self.assertIn("_nhd.", n.resolve_thumbnail_url(v, n.THUMB_NHD))
+        self.assertIn("_large.", n.resolve_thumbnail_url(v, n.THUMB_LARGE))
+        self.assertIn("_std.", n.resolve_thumbnail_url(v, n.THUMB_STD))
+
+    def test_falls_back_to_other_size(self):
+        # 選んだサイズが無ければ高画質→低画質の順で代替する
+        thumb = {"url": "https://img.example.invalid/std.jpg"}
+        self.assertEqual(
+            n.resolve_thumbnail_url(self._video(thumb), n.THUMB_LARGE),
+            "https://img.example.invalid/std.jpg",
+        )
+
+    def test_no_thumbnail_returns_none(self):
+        self.assertIsNone(n.resolve_thumbnail_url({"id": "so1"}, n.THUMB_LARGE))
+        self.assertIsNone(n.resolve_thumbnail_url(self._video({}), n.THUMB_LARGE))
+
+
+class SanitizeFilenameTest(unittest.TestCase):
+    def test_invalid_chars_become_spaces(self):
+        out = n.sanitize_filename('a/b\\c:d*e?f"g<h>i|j')
+        self.assertEqual(out, "a b c d e f g h i j")
+
+    def test_control_chars_and_whitespace(self):
+        self.assertEqual(n.sanitize_filename("a\tb\nc  d"), "a b c d")
+
+    def test_trims_trailing_dot_and_space(self):
+        self.assertEqual(n.sanitize_filename("a. "), "a")
+        self.assertEqual(n.sanitize_filename("..a.."), "a")
+
+    def test_max_len(self):
+        out = n.sanitize_filename("あ" * 200)
+        self.assertLessEqual(len(out), n._THUMB_FILENAME_MAX)
+
+    def test_empty(self):
+        self.assertEqual(n.sanitize_filename(""), "")
+        self.assertEqual(n.sanitize_filename(None), "")
+
+
+class ThumbnailFilenameTest(unittest.TestCase):
+    def test_with_title(self):
+        v = {"id": "so33963154", "title": "テスト 動画"}
+        self.assertEqual(n.thumbnail_filename(v), "so33963154_テスト 動画.jpg")
+
+    def test_title_sanitized(self):
+        v = {"id": "sm9", "title": "a/b:c"}
+        self.assertEqual(n.thumbnail_filename(v), "sm9_a b c.jpg")
+
+    def test_without_title(self):
+        v = {"id": "sm9", "title": ""}
+        self.assertEqual(n.thumbnail_filename(v), "sm9.jpg")
+
+
+# ---------------------------------------------------------------------------
+# download_thumbnails
+# ---------------------------------------------------------------------------
+class DownloadThumbnailsTest(unittest.TestCase):
+    def _video(self, vid, with_thumb=True, title="題名"):
+        return {
+            "id": vid,
+            "title": title,
+            "thumbnail": _thumb_dict(vid) if with_thumb else {},
+        }
+
+    def test_saves_files(self):
+        videos = [self._video("so1"), self._video("so2")]
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(n, "http_get_bytes", return_value=b"JPEGDATA") as get, \
+                mock.patch.object(n.time, "sleep") as sleep:
+            saved, skipped, failures, reason = n.download_thumbnails(videos, d)
+            saved_ok = all(
+                os.path.isfile(os.path.join(d, f"so{i}_題名.jpg")) for i in (1, 2)
+            )
+        self.assertEqual((saved, skipped, failures, reason), (2, 0, [], None))
+        self.assertEqual(get.call_count, 2)
+        self.assertTrue(saved_ok)
+        self.assertEqual(sleep.call_count, 2)   # 保存後に間隔を空ける
+
+    def test_skips_existing_without_request(self):
+        videos = [self._video("so1")]
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(n, "http_get_bytes") as get, \
+                mock.patch.object(n.time, "sleep"):
+            # 先に同名ファイルを作っておく
+            open(os.path.join(d, "so1_題名.jpg"), "wb").close()
+            saved, skipped, failures, reason = n.download_thumbnails(videos, d)
+        self.assertEqual((saved, skipped, failures, reason), (0, 1, [], None))
+        self.assertFalse(get.called)
+
+    def test_respects_max_items(self):
+        videos = [self._video(f"so{i}") for i in range(3)]
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(n, "http_get_bytes", return_value=b"x"), \
+                mock.patch.object(n.time, "sleep"):
+            saved, _, _, _ = n.download_thumbnails(videos, d, max_items=2)
+        self.assertEqual(saved, 2)
+
+    def test_http_failure_recorded_not_raised(self):
+        err = urllib.error.HTTPError("https://x", 404, "Not Found", {}, None)
+        videos = [self._video("so1")]
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(n, "http_get_bytes", side_effect=err), \
+                mock.patch.object(n.time, "sleep"):
+            saved, _, failures, reason = n.download_thumbnails(videos, d)
+        self.assertEqual(saved, 0)
+        self.assertIsNone(reason)
+        self.assertEqual(failures[0], ("so1", "HTTP 404"))
+
+    def test_stops_after_consecutive_failures(self):
+        err = urllib.error.HTTPError("https://x", 503, "Service Unavailable", {}, None)
+        videos = [self._video(f"so{i}") for i in range(30)]
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(n, "http_get_bytes", side_effect=err) as get, \
+                mock.patch.object(n.time, "sleep"):
+            _, _, failures, reason = n.download_thumbnails(videos, d)
+        self.assertEqual(reason, "too_many_failures")
+        self.assertEqual(get.call_count, n.THUMB_MAX_CONSECUTIVE_FAILURES)
+        self.assertEqual(len(failures), n.THUMB_MAX_CONSECUTIVE_FAILURES)
+
+    def test_missing_url_counted_as_failure_without_request(self):
+        videos = [self._video("so1", with_thumb=False)]
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(n, "http_get_bytes") as get:
+            saved, _, failures, reason = n.download_thumbnails(videos, d)
+        self.assertEqual(saved, 0)
+        self.assertFalse(get.called)
+        self.assertEqual(failures[0], ("so1", "サムネイルURLなし"))
+        self.assertIsNone(reason)
+
+    def test_cancel_stops_loop(self):
+        videos = [self._video(f"so{i}") for i in range(5)]
+        state = {"n": 0}
+
+        def should_stop():
+            state["n"] += 1
+            return state["n"] > 2   # 2件处理后に停止判定
+
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(n, "http_get_bytes", return_value=b"x"), \
+                mock.patch.object(n.time, "sleep"):
+            saved, _, _, reason = n.download_thumbnails(
+                videos, d, should_stop=should_stop,
+            )
+        self.assertEqual(reason, "cancelled")
+        self.assertEqual(saved, 2)
+
 
 # ---------------------------------------------------------------------------
 # HTTP ヘッダ（ニコ動の担当者からの依頼を守る）
@@ -300,7 +501,7 @@ class UserAgentTest(unittest.TestCase):
         self.assertTrue(n.USER_AGENT.isascii(), n.USER_AGENT)
 
     def test_requests_use_the_user_agent(self):
-        # 2つの取得経路（nvapi / HTML）の両方に乗っていること
+        # 3つの取得経路（nvapi / HTML / サムネイル）の両方に乗っていること
         captured = []
 
         def fake_urlopen(req, timeout=None):
@@ -309,7 +510,7 @@ class UserAgentTest(unittest.TestCase):
 
         with mock.patch.object(n.urllib.request, "urlopen", side_effect=fake_urlopen), \
                 mock.patch.object(n.time, "sleep"):   # リトライ待ちを飛ばす
-            for getter in (n.http_get_json, n.http_get_text):
+            for getter in (n.http_get_json, n.http_get_text, n.http_get_bytes):
                 with self.assertRaises(urllib.error.URLError):
                     getter("https://example.invalid/")
         self.assertTrue(captured)
@@ -588,6 +789,81 @@ class GuiSmokeTest(unittest.TestCase):
             self.app.open_login_dialog()
         self.assertFalse(ctor.called)
         self.assertTrue(existing.lifted)
+
+    # -- サムネイル保存 ----------------------------------------------------
+    def test_thumb_row_exists(self):
+        texts = _widget_texts(self.app)
+        self.assertIn("サムネイル保存:", texts)
+        self.assertIn("保存…", texts)
+
+    def test_get_max_items_parses_field(self):
+        self.app.max_var.set("50")
+        self.assertEqual(self.app.get_max_items(), 50)
+        self.app.max_var.set("")
+        self.assertIsNone(self.app.get_max_items())
+
+    def test_on_download_thumbs_requires_results(self):
+        with mock.patch.object(n.filedialog, "askdirectory") as ask:
+            self.app.on_download_thumbs()
+        self.assertFalse(ask.called)
+        self.assertIn("先に「取得」", self.app.status_var.get())
+
+    def test_on_download_thumbs_cancelled_directory(self):
+        self.app._videos = [{"id": "so1", "title": "", "thumbnail": {}}]
+        with mock.patch.object(n.filedialog, "askdirectory", return_value=""), \
+                mock.patch.object(n, "download_thumbnails") as dl:
+            self.app.on_download_thumbs()
+        self.assertFalse(dl.called)
+        self.assertFalse(self.app._busy)
+
+    def test_on_download_thumbs_passes_options(self):
+        self.app._videos = [{"id": "so1", "title": "", "thumbnail": {}}]
+        self.app.thumb_max_var.set("10")
+        self.app.thumb_interval_var.set("2")
+        with mock.patch.object(n.filedialog, "askdirectory", return_value="C:/thumbs"), \
+                mock.patch.object(n, "download_thumbnails", return_value=(0, 0, [], None)), \
+                mock.patch.object(n.threading, "Thread") as thread:
+            self.app.on_download_thumbs()
+        args = thread.call_args.kwargs["args"]
+        self.assertEqual(args, ("C:/thumbs", n.THUMB_LARGE, 10, 2.0))
+
+    def test_thumb_worker_reports_summary(self):
+        self.app._videos = [{"id": "so1", "title": "", "thumbnail": {}}]
+        with mock.patch.object(n, "download_thumbnails",
+                               return_value=(3, 1, [], None)):
+            self.app._thumb_worker("C:/thumbs", n.THUMB_LARGE, None, 0.5)
+            self.app.update()
+        self.assertIn("保存3件", self.app.status_var.get())
+        self.assertIn("スキップ1件", self.app.status_var.get())
+        self.assertFalse(self.app._busy)
+
+    def test_thumb_worker_failures_show_warning(self):
+        self.app._videos = [{"id": "so1", "title": "", "thumbnail": {}}]
+        failures = [("so1", "HTTP 404")]
+        with mock.patch.object(n, "download_thumbnails",
+                               return_value=(0, 0, failures, None)), \
+                mock.patch.object(n.messagebox, "showwarning") as warn:
+            self.app._thumb_worker("C:/thumbs", n.THUMB_LARGE, None, 0.5)
+            self.app.update()
+        self.assertTrue(warn.called)
+        self.assertIn("HTTP 404", warn.call_args[0][1])
+
+    def test_thumb_worker_cancelled_summary(self):
+        self.app._videos = [{"id": "so1", "title": "", "thumbnail": {}}]
+        with mock.patch.object(n, "download_thumbnails",
+                               return_value=(1, 0, [], "cancelled")):
+            self.app._thumb_worker("C:/thumbs", n.THUMB_LARGE, None, 0.5)
+            self.app.update()
+        self.assertIn("中断しました", self.app.status_var.get())
+
+    def test_thumb_worker_too_many_failures(self):
+        self.app._videos = [{"id": "so1", "title": "", "thumbnail": {}}]
+        with mock.patch.object(n, "download_thumbnails",
+                               return_value=(0, 0, [("so1", "HTTP 503")], "too_many_failures")), \
+                mock.patch.object(n.messagebox, "showwarning"):   # モーダルで止まらないようにする
+            self.app._thumb_worker("C:/thumbs", n.THUMB_LARGE, None, 0.5)
+            self.app.update()
+        self.assertIn("打ち切り", self.app.status_var.get())
 
     # -- 状態ラベル --------------------------------------------------------
     def test_indicator_labels(self):

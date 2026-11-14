@@ -2,6 +2,7 @@
 
 ニコニコ動画の **シリーズ / マイリスト / 検索結果** から動画情報を取得し、
 **TSV（詳細）または ID のみ** で書き出す tkinter GUI ツール。
+取得済み結果の **サムネイル画像（JPEG）の保存**にも対応。
 
 API や認証の前提は [`nicovideo-api.md`](nicovideo-api.md) を参照。
 
@@ -18,6 +19,7 @@ API や認証の前提は [`nicovideo-api.md`](nicovideo-api.md) を参照。
 - 種類は「自動判定」のままで URL から判別する（数字のみはシリーズ扱い）。
 - 取得 → 結果を一覧表示 → **コピー** / **ファイルに保存**。
 - **最大件数**の指定、および取得中の **中断**（ここまでの結果を表示）。
+- 取得済み結果の **サムネイル保存**（`保存…` ボタン。詳細は §2 参照）。
 - マイリストの認証は **GUI の「ログイン設定…」で `user_session` を保存**する方式。
   保存先は同フォルダの `cookie.txt`（`resolve_session` が読む）。既定では保存されず、
   ダイアログで「保存する」を押したときだけ書き込む（平文・値のみ1行）。
@@ -30,12 +32,33 @@ URL: [.............................................] [取得] [中断]
 種類: [自動判定▼]   □ 数値のみ (so/sm を外す)          [ログイン設定…] ログイン: 未設定
 出力形式: (●)TSV（詳細） ( )IDのみ   □ ヘッダ行を付ける
 最大件数: [    ] 件 （空欄＝制限なし／検索は約5,000件が上限）
+サムネイル保存: [高精細▼] 最大件数: [    ] 件  間隔: [0.5] 秒/件      [保存…]
 ┌──────────────────────────────────────────────────┐
 │ （結果。TSV または ID の一覧）                      │
 └──────────────────────────────────────────────────┘
 [コピー] [ファイルに保存]
 状態: 12件取得しました。
 ```
+
+### サムネイル保存（`保存…`）
+
+取得済み結果（シリーズ / マイリスト / 検索のいずれも）のサムネイルを JPEG で保存する。
+`保存…` で保存先フォルダを選ぶと別スレッドでダウンロード開始。追加の API 呼び出しは無く、
+取得済み JSON に含まれる `thumbnail` URL をそのまま使う（認証も不要）。
+
+- **サイズ**: `超高精細(nHdUrl)` / `高精細(largeUrl・既定)` / `標準(url)`。
+  選択分が無い動画は高画質→低画質の順に代替する。どれも無ければ「サムネイルURLなし」として失敗扱い。
+- **ファイル名**: `{動画ID}_{サニタイズ済みタイトル}.jpg`（タイトルは判読用。無くても `ID.jpg`）。
+  タイトルは非法文字（`\ / : * ? " < > |`・制御文字）を空白に直し、60文字で切る。
+- **最大件数**: 空欄＝全件。結果の先頭 N 件だけをダウンロードする（取得用の「最大件数」とは別枠）。
+- **間隔（秒/件）**: 既定 0.5 秒、0.2〜10 秒にクランプ。保存成功後のみ待機する
+  （既存スキップはリクエスト自体発生させない＝ニコ動に負荷をかけない）。
+- **既存ファイルはスキップ**（リトライもしない。再実行コストが低い設計）。
+- 429/5xx 等の **連敗が 10 件（`THUMB_MAX_CONSECUTIVE_FAILURES`）に達したら打ち切り**、
+  状態に「失敗が続いたため打ち切りました」と表示（通信障害で淡々と全件リクエストし続けない）。
+- 完了時: 状態バーに `サムネイル: 保存n件 / スキップm件 / 失敗k件（保存先: …）`、
+  失敗があるときは先頭10件を警告ダイアログに列挙。
+- 「中断」でループ先頭（＝1件単位）で停止できる。
 
 「ログイン設定…」は `LoginDialog`（モーダル）を開く。状態ラベルは `未設定` /
 `設定済み（cookie.txt）` / `cookie.txt を読み取れません` / `要再ログイン` を表示する。
@@ -119,6 +142,7 @@ on_fetch()
 | `fetch_series` / `fetch_mylist` / `fetch_search` | 取得本体（上記契約） |
 | `_video_info_from_item(item)` | API/埋め込みJSONの1件から必要項目を取り出す |
 | `http_get_json` / `http_get_text` | リトライ付き GET |
+| `http_get_bytes` | サムネイル用のバイナリ GET（リトライなし。失敗は `download_thumbnails` がまとめて扱う） |
 | `extract_embedded_json(html)` | 検索ページの `<meta name="server-response">` を JSON 化 |
 | `normalize_search_url` / `set_query_param` | 検索URLのエンコードと `page` 付与 |
 | `extract_user_session` / `load_user_session` | `cookie.txt` から `user_session` を取り出す（`load_user_session(paths=)` でテスト用に検索先を差し替え可。既定の候補は `script_dir()/cookie.txt` **のみ**＝カレントディレクトリは見ない） |
@@ -130,6 +154,10 @@ on_fetch()
 | `LoginDialog` | ログイン設定のモーダル。入力は `extract_user_session` で正規化し、`is_user_session_value` で形式検証（不一致は警告して閉じない）。`action`（`"save"`/`"delete"`/`None`）と `value` で結果を返す |
 | `App._ensure_session` / `update_login_indicator` / `open_login_dialog` / `_save_session` / `_delete_saved_session` | mylist 実行前の解決・状態ラベル更新・ダイアログの多重生成防止つき表示・保存/削除の実行 |
 | `format_duration` / `format_count` / `sanitize_cell` / `strip_prefix` | 表示用の整形 |
+| `resolve_thumbnail_url(video, size)` | 選択サイズ→サムネイルURL。無いものは高画質→低画質順に代替 |
+| `sanitize_filename` / `thumbnail_filename` | 保存ファイル名（`{ID}_{タイトル}.jpg`。非法文字除去・60文字で切る） |
+| `parse_max_items` / `parse_interval` | 入力欄の解釈（不正値は None / 既定0.5秒。間隔は 0.2〜10 にクランプ） |
+| `download_thumbnails(...)` | サムネイル保存本体。`(saved, skipped, failures, reason)` を返す（reason: None/`"cancelled"`/`"too_many_failures"`） |
 | `pick_text_font` | 結果欄のフォント自動選択 |
 
 ### 3.4 定数
@@ -141,6 +169,8 @@ on_fetch()
 | `PAGE_SIZE` | 100 | シリーズ/マイリストのページ取得件数 |
 | `SEARCH_PAGE_SIZE` | 32 | 検索の1ページ件数（ニコ動側固定・参考値） |
 | `SEARCH_MAX_PAGE` | 157 | 検索のページ上限（≒5,024件） |
+| `THUMB_DEFAULT_INTERVAL` | 0.5 秒 | サムネイル保存の既定の間隔（`THUMB_MIN_INTERVAL`=0.2〜`THUMB_MAX_INTERVAL`=10 にクランプ） |
+| `THUMB_MAX_CONSECUTIVE_FAILURES` | 10 | ダウンロード連敗で打ち切る件数（ニコ動への負荷への配慮） |
 | `FONT_CANDIDATES` | リスト | 結果欄フォントの優先順 |
 
 ## 4. GUI の落とし穴（過去にハマった点）
@@ -182,6 +212,8 @@ on_fetch()
   `extract_embedded_json` と `fetch_search` のパスを要修正。
 - 認証情報は「保存する」を押したときだけ `script_dir()/cookie.txt` に**平文**で保存する
   （保存先は固定。暗号化はしない）。メモリ上だけで使う経路は用意していない。
+- サムネイル保存は **取得済み結果の分だけ**（動画IDを直接指定して個別に取ることはしない）。
+  削除済み・限定公開の動画は「サムネイルURLなし」や HTTP エラーとして失敗にカウントする。
 
 ## 6. テスト手順
 
@@ -200,6 +232,9 @@ import nicoids as n
 v, t, r = n.fetch_series("228685")                 # 16件, r=None
 v, t, r = n.fetch_series("228685", max_items=5)    # 5件, r="max_items"
 v, t, r = n.fetch_search(url, should_stop=lambda: True)  # 1ページで r="cancelled"
+
+# サムネイル保存（取得済み v を使う。戻り値: saved, skipped, failures, reason）
+s, k, f, r = n.download_thumbnails(v[:3], r"C:\temp\thumbs")   # 3件だけ・既定0.5秒間隔
 
 # 整形・認証解決
 n.format_duration(1420)      # "23:40"
@@ -239,3 +274,7 @@ app = n.App(); app.update_idletasks(); app.destroy()
 - **v1.0.0 として最初のリリースを発行**。`__version__` を追加してタイトルバーに表示し、
   配布は GitHub Releases（添付は `nicoids.py` のみ）に移行。タグ push で
   `.github/workflows/release.yml` がテスト後にリリースを作る（手順は `AGENTS.md` の「リリース手順」）。
+- **v1.1.0: サムネイル保存機能を追加**。取得済み結果（シリーズ/マイリスト/検索）のサムネイルを
+  JPEG で保存。サイズ選択（既定＝高精細）、保存専用の最大件数・間隔（既定0.5秒、連敗10で打ち切り）、
+  既存ファイルはスキップ（リクエスト発生なし）。`_video_info_from_item` が `thumbnail` を保持し、
+  `download_thumbnails` / `http_get_bytes` ほかを追加。TSV 出力は変更なし。

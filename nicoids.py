@@ -9,6 +9,7 @@
 出力モード:
 - TSV（詳細）: 動画ID / タイトル / 再生数 / コメント数 / 再生時間(mm:ss)
 - IDのみ    : 動画IDを改行区切りで出力
+- サムネイル保存: 取得済み結果のサムネイル画像（JPEG）をフォルダにダウンロード
 
 標準ライブラリのみで動作します（tkinter / urllib）。
 """
@@ -17,7 +18,7 @@
 # MIT License. 全文は同梱の LICENSE、または
 # https://github.com/n2daime/nicotools/blob/main/LICENSE を参照。
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 import html
 import json
@@ -57,6 +58,22 @@ SEARCH_MAX_PAGE = 157
 MODE_TSV = "TSV（詳細）"
 MODE_ID = "IDのみ"
 TSV_HEADER = ["動画ID", "タイトル", "再生数", "コメント数", "再生時間"]
+
+# サムネイル保存（サイズは video.thumbnail のキーに対応）
+THUMB_NHD = "超高精細"
+THUMB_LARGE = "高精細"
+THUMB_STD = "標準"
+THUMB_SIZES = [THUMB_NHD, THUMB_LARGE, THUMB_STD]
+_THUMB_KEY_BY_SIZE = {THUMB_NHD: "nHdUrl", THUMB_LARGE: "largeUrl", THUMB_STD: "url"}
+_THUMB_KEYS_BY_QUALITY = ["nHdUrl", "largeUrl", "url"]   # 高い順（フォールバック順）
+
+# ニコ動への負荷への配慮: 既定の間隔と、連敗で打ち切る閾値
+THUMB_DEFAULT_INTERVAL = 0.5
+THUMB_MIN_INTERVAL = 0.2
+THUMB_MAX_INTERVAL = 10.0
+THUMB_MAX_CONSECUTIVE_FAILURES = 10
+_THUMB_FILENAME_MAX = 60    # Windows の MAX_PATH 対策でタイトルを切る
+_THUMB_FAILURE_DETAIL_MAX = 10
 
 
 # 結果欄のフォント候補（先頭から順に、存在するものを使う）
@@ -293,6 +310,17 @@ def http_get_text(url, cookie=None):
     raise last_error
 
 
+def http_get_bytes(url):
+    """バイナリ取得（サムネイル用）。リトライはしない（失敗はまとめて扱う）。"""
+    headers = {
+        "User-Agent": USER_AGENT,
+        "Accept": "image/jpeg,image/*;q=0.8",
+    }
+    req = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+        return resp.read()
+
+
 _SERVER_RESPONSE_RE = re.compile(
     r'<meta\s+name="server-response"\s+content="([\s\S]*?)"\s*/?>'
 )
@@ -351,6 +379,9 @@ def _video_info_from_item(item):
 
     count = video.get("count") or {}
     owner = video.get("owner") or {}
+    thumb = video.get("thumbnail")
+    if not isinstance(thumb, dict):
+        thumb = {}
     return {
         "id": vid,
         "title": video.get("title") or "",
@@ -360,6 +391,11 @@ def _video_info_from_item(item):
         "owner": owner.get("name") or "",
         "registered_at": video.get("registeredAt") or "",
         "description": video.get("shortDescription") or "",
+        "thumbnail": {
+            "url": thumb.get("url") or "",
+            "largeUrl": thumb.get("largeUrl") or "",
+            "nHdUrl": thumb.get("nHdUrl") or "",
+        },
     }
 
 
@@ -512,6 +548,130 @@ def fetch_search(page_url, progress=None, should_stop=None, max_items=None):
     if reason is None and total is not None and len(videos) < total:
         reason = "page_limit"
     return _trim(videos, max_items), total, reason
+
+
+# ---------------------------------------------------------------------------
+# サムネイル保存
+# ---------------------------------------------------------------------------
+def resolve_thumbnail_url(video, size=THUMB_LARGE):
+    """選択サイズに応じたサムネイルURL。無いものは高画質→低画質の順で代替する。"""
+    thumb = video.get("thumbnail")
+    if not isinstance(thumb, dict):
+        return None
+    key = _THUMB_KEY_BY_SIZE.get(size, "largeUrl")
+    for k in [key] + [k for k in _THUMB_KEYS_BY_QUALITY if k != key]:
+        url = thumb.get(k)
+        if isinstance(url, str) and url.startswith("http"):
+            return url
+    return None
+
+
+def sanitize_filename(text, max_len=_THUMB_FILENAME_MAX):
+    """Windows のファイル名に使えない文字を空白に直し、長さを読む。"""
+    s = str(text if text is not None else "")
+    s = re.sub(r'[\\/:*?"<>|\x00-\x1f\x7f]', " ", s)
+    s = re.sub(r"\s+", " ", s).strip().strip(".")
+    if len(s) > max_len:
+        s = s[:max_len].rstrip()
+    return s
+
+
+def thumbnail_filename(video):
+    """保存ファイル名。動画ID が一意なのでタイトルは判読用（無くても作れる）。"""
+    title = sanitize_filename(video.get("title"))
+    if title:
+        return f"{video['id']}_{title}.jpg"
+    return f"{video['id']}.jpg"
+
+
+def parse_interval(text):
+    """間隔入力（秒/件）を解釈し、範囲内に収める。空欄・不正値は既定値。"""
+    try:
+        value = float(str(text if text is not None else "").strip())
+    except ValueError:
+        return THUMB_DEFAULT_INTERVAL
+    if value != value:    # float("nan") などの非有限値を弾く
+        return THUMB_DEFAULT_INTERVAL
+    if value < THUMB_MIN_INTERVAL:
+        return THUMB_MIN_INTERVAL
+    if value > THUMB_MAX_INTERVAL:
+        return THUMB_MAX_INTERVAL
+    return value
+
+
+def parse_max_items(text):
+    """最大件数入力を解釈する。空欄・不正値・0以下は None（制限なし）。"""
+    raw = str(text if text is not None else "").strip()
+    if not raw:
+        return None
+    try:
+        value = int(raw.replace(",", ""))
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
+def _describe_fetch_error(error):
+    if isinstance(error, urllib.error.HTTPError):
+        return f"HTTP {error.code}"
+    return str(error).splitlines()[0] if str(error) else error.__class__.__name__
+
+
+def download_thumbnails(videos, dest_dir, size=THUMB_LARGE, interval=THUMB_DEFAULT_INTERVAL,
+                        max_items=None, progress=None, should_stop=None):
+    """動画一覧のサムネイルを dest_dir にダウンロードする。
+
+    既存ファイルはスキップ（リクエスト自体発生させない＝ニコ動に負荷をかけない）。
+    戻り値: (saved, skipped, failures, reason)
+      failures: [(動画ID, 理由), ...]（表示用に先頭の一部だけ）
+      reason: None / "cancelled" / "too_many_failures"
+    """
+    targets = videos if not max_items else videos[:max_items]
+    total = len(targets)
+    saved = skipped = 0
+    failures = []
+    consecutive_failures = 0
+    reason = None
+
+    for index, video in enumerate(targets):
+        if _stop_requested(should_stop):
+            reason = "cancelled"
+            break
+        if progress:
+            progress(
+                f"サムネイルをダウンロード中… {index + 1}/{total}"
+                f"（保存{saved}・スキップ{skipped}・失敗{len(failures)}）"
+            )
+        path = os.path.join(dest_dir, thumbnail_filename(video))
+        if os.path.exists(path):
+            skipped += 1
+            consecutive_failures = 0
+            continue
+        url = resolve_thumbnail_url(video, size)
+        if not url:
+            failures.append((video.get("id", "?"), "サムネイルURLなし"))
+            continue
+        try:
+            data = http_get_bytes(url)
+        except Exception as e:  # noqa: BLE001
+            # リトライせず失敗として記録し、連敗が続くようなら打ち切る
+            failures.append((video.get("id", "?"), _describe_fetch_error(e)))
+            consecutive_failures += 1
+            if consecutive_failures >= THUMB_MAX_CONSECUTIVE_FAILURES:
+                reason = "too_many_failures"
+                break
+            continue
+        try:
+            with open(path, "wb") as f:
+                f.write(data)
+        except OSError as e:
+            failures.append((video.get("id", "?"), str(e)))
+            continue
+        saved += 1
+        consecutive_failures = 0
+        time.sleep(interval)   # 次のリクエストまで待って負荷をならす
+
+    return saved, skipped, failures, reason
 
 
 # ---------------------------------------------------------------------------
@@ -716,8 +876,8 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title(f"ニコニコ動画 ID エクスポート v{__version__}")
-        self.geometry("660x520")
-        self.minsize(620, 420)   # 「ログイン設定…」＋状態ラベルを右端に置くため余裕を持たせる
+        self.geometry("660x560")
+        self.minsize(620, 470)   # 「ログイン設定…」＋状態ラベルを右端に置くため余裕を持たせる
 
         self._busy = False
         self._videos = []
@@ -787,6 +947,29 @@ class App(tk.Tk):
         ttk.Label(
             opts3, text="（空欄＝制限なし／検索は約5,000件が上限）",
         ).pack(side="left", padx=(8, 0))
+
+        opts4 = ttk.Frame(self, padding=(10, 4, 10, 0))
+        opts4.pack(side="top", fill="x")
+        ttk.Label(opts4, text="サムネイル保存:").pack(side="left")
+        self.thumb_size_var = tk.StringVar(value=THUMB_LARGE)
+        self.thumb_size_box = ttk.Combobox(
+            opts4, textvariable=self.thumb_size_var, state="readonly", width=8,
+            values=THUMB_SIZES,
+        )
+        self.thumb_size_box.pack(side="left", padx=(6, 12))
+        ttk.Label(opts4, text="最大件数:").pack(side="left")
+        self.thumb_max_var = tk.StringVar(value="")
+        self.thumb_max_entry = ttk.Entry(opts4, textvariable=self.thumb_max_var, width=6)
+        self.thumb_max_entry.pack(side="left", padx=(6, 2))
+        ttk.Label(opts4, text="件  間隔:").pack(side="left")
+        self.thumb_interval_var = tk.StringVar(value=str(THUMB_DEFAULT_INTERVAL))
+        self.thumb_interval_entry = ttk.Entry(opts4, textvariable=self.thumb_interval_var, width=5)
+        self.thumb_interval_entry.pack(side="left", padx=(6, 2))
+        ttk.Label(
+            opts4, text="秒/件",
+        ).pack(side="left")
+        self.thumb_btn = ttk.Button(opts4, text="保存…", command=self.on_download_thumbs)
+        self.thumb_btn.pack(side="right")
 
         mid = ttk.Frame(self, padding=(10, 8, 10, 0))
         self.text = tk.Text(mid, wrap="none", undo=False, height=12, font=pick_text_font(self, 10))
@@ -921,17 +1104,14 @@ class App(tk.Tk):
         self.url_entry.configure(state=state)
         self.max_entry.configure(state=state)
         self.login_btn.configure(state=state)
+        self.thumb_size_box.configure(state="disabled" if busy else "readonly")
+        self.thumb_max_entry.configure(state=state)
+        self.thumb_interval_entry.configure(state=state)
+        self.thumb_btn.configure(state=state)
         self.abort_btn.configure(state=("normal" if busy else "disabled"))
 
     def get_max_items(self):
-        raw = self.max_var.get().strip()
-        if not raw:
-            return None
-        try:
-            value = int(raw.replace(",", ""))
-        except ValueError:
-            return None
-        return value if value > 0 else None
+        return parse_max_items(self.max_var.get())
 
     # -- actions ----------------------------------------------------------
     def on_fetch(self):
@@ -1094,6 +1274,54 @@ class App(tk.Tk):
         with open(path, "w", encoding="utf-8", newline="\n") as f:
             f.write("\n".join(lines) + "\n")
         self.set_status(f"{len(self._videos)}件を保存しました: {path}")
+
+    # -- サムネイル保存 ------------------------------------------------------
+    def on_download_thumbs(self):
+        """取得済み結果のサムネイルを、選んだフォルダにダウンロードする。"""
+        if self._busy:
+            return
+        if not self._videos:
+            self.set_status("サムネイルの保存は、先に「取得」で結果を出してから行えます。")
+            return
+        dest = filedialog.askdirectory(title="サムネイルを保存するフォルダを選択")
+        if not dest:
+            return
+        self._cancel.clear()
+        self.set_busy(True)
+        self.set_status("サムネイルをダウンロード中…")
+        threading.Thread(
+            target=self._thumb_worker,
+            args=(dest, self.thumb_size_var.get(),
+                  parse_max_items(self.thumb_max_var.get()),
+                  parse_interval(self.thumb_interval_var.get())),
+            daemon=True,
+        ).start()
+
+    def _thumb_worker(self, dest, size, max_items, interval):
+        try:
+            saved, skipped, failures, reason = download_thumbnails(
+                self._videos, dest, size=size, interval=interval, max_items=max_items,
+                progress=self._progress, should_stop=self._cancel.is_set,
+            )
+        except Exception as e:  # noqa: BLE001
+            self._fail(f"エラー: {e}")
+            return
+        self.after(0, self._thumb_done, saved, skipped, failures, reason, dest)
+
+    def _thumb_done(self, saved, skipped, failures, reason, dest):
+        self.set_busy(False)
+        summary = f"サムネイル: 保存{saved}件 / スキップ{skipped}件 / 失敗{len(failures)}件"
+        if reason == "cancelled":
+            self.set_status("中断しました。" + summary)
+        elif reason == "too_many_failures":
+            self.set_status("失敗が続いたため打ち切りました（ニコ動の一時的な混雑の可能性）。" + summary)
+        else:
+            self.set_status(f"{summary}（保存先: {dest}）")
+        if failures:
+            detail = "\n".join(f"{vid}: {msg}" for vid, msg in failures[:_THUMB_FAILURE_DETAIL_MAX])
+            more = "" if len(failures) <= _THUMB_FAILURE_DETAIL_MAX else \
+                f"\n…ほか {len(failures) - _THUMB_FAILURE_DETAIL_MAX}件"
+            messagebox.showwarning("サムネイル", f"失敗した動画があります。\n{detail}{more}")
 
 
 def main():
